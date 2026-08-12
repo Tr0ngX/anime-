@@ -3993,10 +3993,29 @@ Tabs.Settings:AddInput("FPSCap", {
 local fixLagState = {
     lighting = nil,
     parts = {},
-    decals = {}
+    decals = {},
+    effects = {}
 }
+local function disableBlurEffects()
+    pcall(function()
+        local lighting = game:GetService("Lighting")
+        for _, effect in ipairs(lighting:GetDescendants()) do
+            if effect:IsA("DepthOfFieldEffect") or effect:IsA("BlurEffect") then
+                effect.Enabled = false
+            end
+        end
+        if workspace.CurrentCamera then
+            for _, effect in ipairs(workspace.CurrentCamera:GetDescendants()) do
+                if effect:IsA("DepthOfFieldEffect") or effect:IsA("BlurEffect") then
+                    effect.Enabled = false
+                end
+            end
+        end
+    end)
+end
 local function SetFixLagEnabled(enabled)
     local lighting = game:GetService("Lighting")
+    disableBlurEffects()
     if enabled then
         for _, settingName in ipairs({"OwnUnitVFXEnabled", "AbilityVFXEnabled", "UnitAuraEnabled", "TraitAuraEnabled", "BuffIndicatorsEnabled", "DamageIndicatorsEnabled"}) do
             local ok, value = pcall(Actions.GetSettingValue, settingName)
@@ -4045,6 +4064,11 @@ local function SetFixLagEnabled(enabled)
         end
     end
 end
+task.spawn(function()
+    while expeditionScriptIsCurrent() and task.wait(5) do
+        disableBlurEffects()
+    end
+end)
 local VirtualUser = game:GetService("VirtualUser")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local lastAntiAfkInputAt = 0
@@ -4686,31 +4710,18 @@ task.spawn(function()
         blackMatchValue.Text = tostring(blackMatchesPlayed)
         blackLive.Text = localizeText("ĐANG TREO") .. "  /  " .. tostring(blackMatchesPlayed) .. " " .. localizeText("TRẬN")
         pcall(function()
-            local pGui = game.Players.LocalPlayer:FindFirstChild("PlayerGui")
-            local expLabel = pGui and pGui:FindFirstChild("BottomHUD")
-                and pGui.BottomHUD:FindFirstChild("Frame")
-                and pGui.BottomHUD.Frame:FindFirstChild("Frame")
-                and pGui.BottomHUD.Frame.Frame:FindFirstChild("Frame")
-                and pGui.BottomHUD.Frame.Frame.Frame:FindFirstChild("Frame")
-                and pGui.BottomHUD.Frame.Frame.Frame.Frame:FindFirstChild("TextLabel")
-            if expLabel and expLabel.Text ~= "" then
-                local rawText = expLabel.Text:gsub("<[^>]+>", "")
-                local lvl, curExpStr, maxExpStr = rawText:match("Lvl%s+(%d+)%s*%(%s*([%d,]+)%s*/%s*([%d,]+)%s*XP%s*%)")
-                if lvl and curExpStr and maxExpStr then
-                    local curExp = tonumber((curExpStr:gsub(",", ""))) or 0
-                    local maxExp = tonumber((maxExpStr:gsub(",", ""))) or 1
+            local lvl, curExp, maxExp, rawExpText = getPlayerExpInfo()
+            if lvl and curExp then
+                if maxExp and maxExp > 0 then
                     local ratio = math.clamp(curExp / maxExp, 0, 1)
                     local filled = math.floor(ratio * 12 + 0.5)
                     local bar = string.rep("▰", filled) .. string.rep("▱", 12 - filled) .. string.format(" %d%%", math.floor(ratio * 100))
-                    blackPlayerExp.Text = string.format("Lvl %s  %s  (%s/%s XP)", lvl, bar, curExpStr, maxExpStr)
+                    blackPlayerExp.Text = string.format("Lvl %s  %s  (%s/%s XP)", tostring(lvl), bar, formatNumber(curExp), formatNumber(maxExp))
                 else
-                    blackPlayerExp.Text = rawText
+                    blackPlayerExp.Text = string.format("Lvl %s (%s EXP)", tostring(lvl), formatNumber(curExp))
                 end
-            else
-                local pd = Fusion.peek(Dependencies.PlayerData)
-                if pd then
-                    blackPlayerExp.Text = string.format("Lvl %s (%s EXP)", tostring(pd.Level or "?"), formatNumber(pd.EXP or 0))
-                end
+            elseif rawExpText then
+                blackPlayerExp.Text = rawExpText
             end
         end)
     end
@@ -8208,24 +8219,61 @@ local function snapshotEquipmentData()
     end
     return snap
 end
-local function snapshotPlayerExp()
-    local ok, exp = pcall(function()
+local function getPlayerExpInfo()
+    local level, curExp, maxExp, rawExpText = nil, nil, nil, nil
+    pcall(function()
         local pGui = game.Players.LocalPlayer:FindFirstChild("PlayerGui")
-        local expLabel = pGui and pGui:FindFirstChild("BottomHUD")
-            and pGui.BottomHUD:FindFirstChild("Frame")
-            and pGui.BottomHUD.Frame:FindFirstChild("Frame")
-            and pGui.BottomHUD.Frame.Frame:FindFirstChild("Frame")
-            and pGui.BottomHUD.Frame.Frame.Frame:FindFirstChild("Frame")
-            and pGui.BottomHUD.Frame.Frame.Frame.Frame:FindFirstChild("TextLabel")
-        if expLabel and expLabel.Text ~= "" then
-            local rawText = expLabel.Text:gsub("<[^>]+>", "")
-            local curExpStr = rawText:match("Lvl%s+%d+%s*%(%s*([%d,]+)%s*/")
-            if curExpStr then return tonumber((curExpStr:gsub(",", ""))) end
+        if pGui then
+            local bottomHUD = pGui:FindFirstChild("BottomHUD")
+            if bottomHUD then
+                for _, descendant in ipairs(bottomHUD:GetDescendants()) do
+                    if descendant:IsA("TextLabel") and descendant.Text ~= "" then
+                        local text = descendant.Text:gsub("<[^>]+>", "")
+                        if text:find("Lvl") and text:find("XP") then
+                            rawExpText = text
+                            break
+                        end
+                    end
+                end
+            end
+            if not rawExpText then
+                for _, descendant in ipairs(pGui:GetDescendants()) do
+                    if descendant:IsA("TextLabel") and descendant.Text ~= "" then
+                        local text = descendant.Text:gsub("<[^>]+>", "")
+                        if text:find("Lvl") and text:find("XP") then
+                            rawExpText = text
+                            break
+                        end
+                    end
+                end
+            end
         end
-        local pd = Fusion.peek(Dependencies.PlayerData)
-        return pd and tonumber(pd.EXP) or nil
     end)
-    return ok and exp or nil
+    if rawExpText then
+        local lvlStr, curStr, maxStr = rawExpText:match("Lvl%s+(%d+)%s*%(%s*([%d,]+)%s*/%s*([%d,]+)%s*XP%s*%)")
+        if lvlStr and curStr and maxStr then
+            level = tonumber(lvlStr)
+            curExp = tonumber((curStr:gsub(",", "")))
+            maxExp = tonumber((maxStr:gsub(",", "")))
+            return level, curExp, maxExp, rawExpText
+        end
+    end
+    pcall(function()
+        local pd = Fusion.peek(Dependencies.PlayerData)
+        if type(pd) == "table" then
+            local lvlVal = Fusion.peek(pd.Level) or pd.Level
+            local expVal = Fusion.peek(pd.EXP) or pd.EXP
+            local maxExpVal = Fusion.peek(pd.MaxEXP) or Fusion.peek(pd.NextLevelEXP) or pd.MaxEXP or pd.NextLevelEXP
+            level = tonumber(lvlVal)
+            curExp = tonumber(expVal)
+            maxExp = tonumber(maxExpVal)
+        end
+    end)
+    return level, curExp, maxExp, rawExpText
+end
+local function snapshotPlayerExp()
+    local level, curExp = getPlayerExpInfo()
+    return curExp
 end
 getgenv().StartItemData = getgenv().StartItemData or snapshotItemData()
 getgenv().StartUnitData = getgenv().StartUnitData or snapshotUnitData()
@@ -8324,10 +8372,12 @@ local function buildMatchStatsEmbed(matchState, isTestMode, customResult, oldIte
             table.insert(inventoryLines, string.format("%s **%s:** %s", item.emoji, item.label, formatNumber(amount)))
         end
     end
+
+    local rawDrops = {}
     if isTestMode then
-        table.insert(itemLines, "📦 **TestItem:** +1,000")
-        table.insert(itemLines, "🗡️ **TestEquipment:** +1")
-        table.insert(unitLines, "🌟 **TestUnit** (Lvl 99): +500 EXP *(Total: 10,000)*")
+        table.insert(rawDrops, "FoodItem7 × 219 (+2)")
+        table.insert(rawDrops, "Goku Equipment × 1")
+        table.insert(unitLines, "└ No units received EXP.")
     else
         oldItemData = oldItemData or getgenv().StartItemData or {}
         local gainedItems = {}
@@ -8340,9 +8390,7 @@ local function buildMatchStatsEmbed(matchState, isTestMode, customResult, oldIte
             end
         end
         for _, item in ipairs(gainedItems) do
-            local emoji = getEmoji(item.key)
-            if emoji == "" then emoji = "📦" end
-            table.insert(itemLines, string.format("%s **%s:** %s + %s", emoji, item.key, formatNumber(item.oldAmount), formatNumber(item.amount)))
+            table.insert(rawDrops, string.format("%s × %s (+%s)", item.key, formatNumber(item.oldAmount + item.amount), formatNumber(item.amount)))
         end
         oldEquipmentData = oldEquipmentData or getgenv().StartEquipmentData or {}
         local equipCounts = {}
@@ -8352,8 +8400,9 @@ local function buildMatchStatsEmbed(matchState, isTestMode, customResult, oldIte
             end
         end
         for name, count in pairs(equipCounts) do
-            table.insert(itemLines, string.format("🗡️ **%s:** +%s", name, formatNumber(count)))
+            table.insert(rawDrops, string.format("%s Equipment × %s", name, formatNumber(count)))
         end
+
         oldUnitData = oldUnitData or getgenv().StartUnitData or {}
         local gainedUnits = {}
         local newUnitsDropped = {}
@@ -8367,15 +8416,32 @@ local function buildMatchStatsEmbed(matchState, isTestMode, customResult, oldIte
                 table.insert(newUnitsDropped, {name = u.Asset or "Unknown", level = u.Level or 1})
             end
         end
+        local rawUnits = {}
         for _, u in ipairs(newUnitsDropped) do
-            table.insert(unitLines, string.format("🎉 **%s** (Lvl %d): *New Drop!*", u.name, u.level))
+            table.insert(rawUnits, string.format("%s (Lvl %d) × New Drop!", u.name, u.level))
         end
         for _, u in ipairs(gainedUnits) do
-            table.insert(unitLines, string.format("🌟 **%s** (Lvl %d): +%s EXP *(Total: %s)*", u.name, u.level, formatNumber(u.expGained), formatNumber(u.currentExp)))
+            table.insert(rawUnits, string.format("%s (Lvl %d) +%s EXP (Total: %s)", u.name, u.level, formatNumber(u.expGained), formatNumber(u.currentExp)))
+        end
+        if #rawUnits == 0 then
+            table.insert(unitLines, "└ No units received EXP.")
+        else
+            for i, line in ipairs(rawUnits) do
+                local prefix = (i == #rawUnits) and "└ " or "├ "
+                table.insert(unitLines, prefix .. line)
+            end
         end
     end
-    if #itemLines == 0 then table.insert(itemLines, localizeText("*Không nhận được Item nào*")) end
-    if #unitLines == 0 then table.insert(unitLines, localizeText("*Không có Unit nào nhận EXP*")) end
+
+    if #rawDrops == 0 then
+        table.insert(itemLines, "└ No drops received.")
+    else
+        for i, line in ipairs(rawDrops) do
+            local prefix = (i == #rawDrops) and "└ " or "├ "
+            table.insert(itemLines, prefix .. line)
+        end
+    end
+
     local minutes = math.floor((matchState.GameTime or 0) / 60)
     local seconds = (matchState.GameTime or 0) % 60
     local fields = {}
@@ -8388,11 +8454,11 @@ local function buildMatchStatsEmbed(matchState, isTestMode, customResult, oldIte
     end
     local itemChunks = chunkLines(itemLines)
     for i, chunk in ipairs(itemChunks) do
-        table.insert(fields, { name = (i == 1) and "🎁 Gained Rewards" or "🎁 Gained Rewards (Cont.)", value = chunk, inline = false })
+        table.insert(fields, { name = (i == 1) and "🎁 Reward Drops" or "🎁 Reward Drops (Cont.)", value = chunk, inline = false })
     end
     local unitChunks = chunkLines(unitLines)
     for i, chunk in ipairs(unitChunks) do
-        table.insert(fields, { name = (i == 1) and "✨ Unit EXP" or "✨ Unit EXP (Cont.)", value = chunk, inline = false })
+        table.insert(fields, { name = (i == 1) and "📚 Unit EXP" or "📚 Unit EXP (Cont.)", value = chunk, inline = false })
     end
     local matchResult = isTestMode and "Test Match" or customResult
     local isInfinite = matchState.Gamemode and string.find(matchState.Gamemode:lower(), "infinite") ~= nil
@@ -8428,38 +8494,23 @@ local function buildMatchStatsEmbed(matchState, isTestMode, customResult, oldIte
             pExpStr = string.format("**Level %s** **(+%s XP)**\n`%s` *(%s / %s XP)*", pLevel, formatNumber(gained), bar, formatNumber(curExp), formatNumber(maxExp))
             return
         end
-        local pGui = game.Players.LocalPlayer:FindFirstChild("PlayerGui")
-        local expLabel = pGui and pGui:FindFirstChild("BottomHUD")
-            and pGui.BottomHUD:FindFirstChild("Frame")
-            and pGui.BottomHUD.Frame:FindFirstChild("Frame")
-            and pGui.BottomHUD.Frame.Frame:FindFirstChild("Frame")
-            and pGui.BottomHUD.Frame.Frame.Frame:FindFirstChild("Frame")
-            and pGui.BottomHUD.Frame.Frame.Frame.Frame:FindFirstChild("TextLabel")
-        if expLabel and expLabel.Text ~= "" then
-            local rawText = expLabel.Text:gsub("<[^>]+>", "") -- Lvl 114 (2,431/3,227 XP)
-            local lvl, curExpStr, maxExpStr = rawText:match("Lvl%s+(%d+)%s*%(%s*([%d,]+)%s*/%s*([%d,]+)%s*XP%s*%)")
-            if lvl and curExpStr and maxExpStr then
-                local curExp = tonumber((curExpStr:gsub(",", ""))) or 0
-                local maxExp = tonumber((maxExpStr:gsub(",", ""))) or 0
+        local lvl, curExp, maxExp, rawExpText = getPlayerExpInfo()
+        if lvl and curExp then
+            pLevel = tostring(lvl)
+            local gainedExpStr = ""
+            local startExp = getgenv().StartPlayerExp
+            if startExp and curExp > startExp then
+                local gained = curExp - startExp
+                gainedExpStr = string.format(" **(+%s XP)**", formatNumber(gained))
+            end
+            if maxExp and maxExp > 0 then
                 local bar = makeProgressBar(curExp, maxExp, 12)
-                pLevel = lvl
-                local gainedExpStr = ""
-                local startExp = getgenv().StartPlayerExp
-                if startExp and curExp > startExp then
-                    local gained = curExp - startExp
-                    gainedExpStr = string.format(" **(+%s XP)**", formatNumber(gained))
-                end
-                pExpStr = string.format("**Level %s**%s\n`%s` *(%s / %s XP)*", lvl, gainedExpStr, bar, curExpStr, maxExpStr)
+                pExpStr = string.format("**Level %s**%s\n`%s` *(%s / %s XP)*", pLevel, gainedExpStr, bar, formatNumber(curExp), formatNumber(maxExp))
             else
-                pExpStr = rawText
+                pExpStr = string.format("**Level %s**%s *(%s EXP)*", pLevel, gainedExpStr, formatNumber(curExp))
             end
-        else
-            local pd = Fusion.peek(Dependencies.PlayerData)
-            if pd then
-                pLevel = tostring(pd.Level or "?")
-                local curExp = tonumber(pd.EXP) or 0
-                pExpStr = string.format("**Level %s** (%s EXP)", pLevel, formatNumber(curExp))
-            end
+        elseif rawExpText then
+            pExpStr = rawExpText
         end
     end)
     if pExpStr ~= "" then
