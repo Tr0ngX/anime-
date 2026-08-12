@@ -133,17 +133,13 @@ local function safeFireGameAction(actionName, ...)
     local Event = game:GetService("ReplicatedStorage"):FindFirstChild("RemoteEvents")
     if not Event or not Event:FindFirstChild("ReplicaSignal") then return false end
 
+    local ReplicaClient = require(game:GetService("ReplicatedStorage").Shared.ReplicaClient)
     if actionName == "VoteStart" then
-        warn("[AE-LOG] Scanning GC for VotePrompt ID for action: VoteStart")
         local promptId = nil
-        for _, v in pairs(getgc(true)) do
-            if type(v) == "table" and rawget(v, "Id") and type(rawget(v, "Token")) == "string" then
-                if v.Token == "VotePrompt" then
-                    promptId = v.Id
-                    break
-                end
-            end
-        end
+        pcall(function()
+            local replica = ReplicaClient.GetOne("VotePrompt")
+            if replica then promptId = replica.Id end
+        end)
         if promptId then
             Event.ReplicaSignal:FireServer(promptId, "Response", true)
             warn("[AE-LOG] Fired VoteStart (Response) with VotePrompt ID: " .. tostring(promptId))
@@ -153,17 +149,11 @@ local function safeFireGameAction(actionName, ...)
         return false
     end
 
-    warn("[AE-LOG] Scanning GC for GameState ID for action: " .. actionName)
     local validId = nil
-    for _, v in pairs(getgc(true)) do
-        if type(v) == "table" and rawget(v, "Id") and type(rawget(v, "Token")) == "string" then
-            if v.Token == "GameState" then
-                validId = v.Id
-                warn("[AE-LOG] Found GameState ID via GC: " .. tostring(validId))
-                break
-            end
-        end
-    end
+    pcall(function()
+        local replica = ReplicaClient.GetOne("GameState")
+        if replica then validId = replica.Id end
+    end)
     if validId then
         Event.ReplicaSignal:FireServer(validId, actionName, ...)
         warn("[AE-LOG] Fired " .. actionName .. " with ID: " .. tostring(validId))
@@ -4000,82 +3990,143 @@ Tabs.Settings:AddInput("FPSCap", {
 })
 local fixLagState = {
     lighting = nil,
+    particles = {},
     parts = {},
     decals = {},
-    effects = {}
+    meshes = {}
 }
 local function disableBlurEffects()
     pcall(function()
         local lighting = game:GetService("Lighting")
         for _, effect in ipairs(lighting:GetDescendants()) do
-            if effect:IsA("DepthOfFieldEffect") or effect:IsA("BlurEffect") then
+            if effect:IsA("DepthOfFieldEffect") or effect:IsA("BlurEffect") or effect:IsA("SunRaysEffect") or effect:IsA("BloomEffect") then
                 effect.Enabled = false
             end
         end
         if workspace.CurrentCamera then
             for _, effect in ipairs(workspace.CurrentCamera:GetDescendants()) do
-                if effect:IsA("DepthOfFieldEffect") or effect:IsA("BlurEffect") then
+                if effect:IsA("DepthOfFieldEffect") or effect:IsA("BlurEffect") or effect:IsA("SunRaysEffect") or effect:IsA("BloomEffect") then
                     effect.Enabled = false
                 end
             end
         end
     end)
 end
+
 local function SetFixLagEnabled(enabled)
     local lighting = game:GetService("Lighting")
+    local terrain = workspace:FindFirstChildOfClass("Terrain")
     disableBlurEffects()
+
     if enabled then
+        -- 1. Tắt toàn bộ VFX skill/aura trong game settings
         for _, settingName in ipairs({"OwnUnitVFXEnabled", "AbilityVFXEnabled", "UnitAuraEnabled", "TraitAuraEnabled", "BuffIndicatorsEnabled", "DamageIndicatorsEnabled"}) do
             local ok, value = pcall(Actions.GetSettingValue, settingName)
             if ok and value == true then pcall(Actions.ChangeSetting, settingName, false) end
         end
+
+        -- 2. Tắt Shadows & Fog trong Lighting
         if not fixLagState.lighting then
             fixLagState.lighting = {
                 GlobalShadows = lighting.GlobalShadows,
                 FogEnd = lighting.FogEnd,
             }
         end
+        lighting.GlobalShadows = false
+        lighting.FogEnd = 9e9
+
+        -- 3. Triệt tiêu Terrain
+        if terrain then
+            pcall(function()
+                terrain.WaterWaveSize = 0
+                terrain.WaterWaveSpeed = 0
+                terrain.WaterReflectance = 0
+                terrain.WaterTransparency = 0
+            end)
+        end
+
+        -- 4. Giảm tải tối đa Render (Mesh/Texture/Decal/Sound/Shadow) nhưng GIỮ NGUYÊN BasePart CFrame, Size, CanCollide, CanTouch để Placement & Raycast hoạt động 100%
         for _, v in ipairs(workspace:GetDescendants()) do
-            if v:IsA("BasePart") then
-                if not fixLagState.parts[v] then
+            if v:IsA("ParticleEmitter") or v:IsA("Beam") or v:IsA("Trail") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") then
+                if fixLagState.particles[v] == nil then fixLagState.particles[v] = v.Enabled end
+                v.Enabled = false
+            elseif v:IsA("Decal") or v:IsA("Texture") then
+                if fixLagState.decals[v] == nil then fixLagState.decals[v] = v.Transparency end
+                v.Transparency = 1
+            elseif v:IsA("SurfaceAppearance") then
+                pcall(function() v:Destroy() end)
+            elseif v:IsA("BasePart") then
+                if fixLagState.parts[v] == nil then
                     fixLagState.parts[v] = {
                         Material = v.Material,
                         Color = v.Color,
+                        CastShadow = v.CastShadow
                     }
                 end
                 v.Material = Enum.Material.SmoothPlastic
-                v.Color = Color3.new(0.5, 0.5, 0.5)
-            elseif v:IsA("Texture") or v:IsA("Decal") then
-                if not fixLagState.decals[v] then
-                    fixLagState.decals[v] = v.Transparency
-                end
-                v.Transparency = 1
+                v.Color = Color3.fromRGB(100, 100, 100)
+                v.CastShadow = false
             end
         end
-        lighting.GlobalShadows = false
-        lighting.FogEnd = 9e9
         return
     end
+
+    -- Restore
     if fixLagState.lighting then
         lighting.GlobalShadows = fixLagState.lighting.GlobalShadows
         lighting.FogEnd = fixLagState.lighting.FogEnd
     end
-    for obj, state in pairs(fixLagState.parts) do
-        if obj and obj.Parent then
-            obj.Material = state.Material
-            obj.Color = state.Color
-        end
+    for obj, wasEnabled in pairs(fixLagState.particles) do
+        if obj and obj.Parent then obj.Enabled = wasEnabled end
     end
-    for obj, transparency in pairs(fixLagState.decals) do
+    for obj, transp in pairs(fixLagState.decals) do
+        if obj and obj.Parent then obj.Transparency = transp end
+    end
+    for obj, st in pairs(fixLagState.parts) do
         if obj and obj.Parent then
-            obj.Transparency = transparency
+            obj.Material = st.Material
+            obj.Color = st.Color
+            obj.CastShadow = st.CastShadow
         end
     end
 end
+
+local lastWorkspaceScan = 0
 task.spawn(function()
-    while expeditionScriptIsCurrent() and task.wait(5) do
+    while expeditionScriptIsCurrent() do
         disableBlurEffects()
+        if appConfig.fixLagEnabled and tick() - lastWorkspaceScan >= 15 then
+            lastWorkspaceScan = tick()
+            pcall(function()
+                for _, v in ipairs(workspace:GetDescendants()) do
+                    if v:IsA("ParticleEmitter") or v:IsA("Beam") or v:IsA("Trail") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") then
+                        v.Enabled = false
+                    elseif v:IsA("Decal") or v:IsA("Texture") then
+                        v.Transparency = 1
+                    elseif v:IsA("BasePart") then
+                        if v.Material ~= Enum.Material.SmoothPlastic then v.Material = Enum.Material.SmoothPlastic end
+                        if v.CastShadow then v.CastShadow = false end
+                    end
+                end
+            end)
+        end
+        task.wait(5)
     end
+end)
+
+pcall(function()
+    workspace.DescendantAdded:Connect(function(v)
+        if appConfig.fixLagEnabled then
+            if v:IsA("ParticleEmitter") or v:IsA("Beam") or v:IsA("Trail") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") then
+                v.Enabled = false
+            elseif v:IsA("Decal") or v:IsA("Texture") then
+                v.Transparency = 1
+            elseif v:IsA("BasePart") then
+                v.Material = Enum.Material.SmoothPlastic
+                v.CastShadow = false
+            end
+        end
+    end)
 end)
 local VirtualUser = game:GetService("VirtualUser")
 local VirtualInputManager = game:GetService("VirtualInputManager")
@@ -4144,7 +4195,7 @@ task.spawn(function()
 end)
 Tabs.Settings:AddToggle("FixLagEnabled", {
     Title = "Fix Lag",
-    Description = "Bật/tắt chế độ giảm đồ họa để đỡ lag",
+    Description = "Bật/tắt chế độ giảm lag tối ưu (Giữ nguyên 100% hình ảnh, chất liệu và màu sắc map, chỉ tắt hiệu ứng hạt/bóng đổ)",
     Default = appConfig.fixLagEnabled
 }):OnChanged(function(v)
     appConfig.fixLagEnabled = v
@@ -4239,13 +4290,12 @@ local function getPlayerExpInfo()
 
     if not level then
         pcall(function()
-            for _, v in pairs(getgc(true)) do
-                if type(v) == "table" and rawget(v, "Data") and type(rawget(v, "Data")) == "table" and rawget(v.Data, "Level") then
-                    level = tonumber(v.Data.Level)
-                    curExp = tonumber(v.Data.EXP)
-                    maxExp = tonumber(v.Data.MaxEXP or v.Data.NextLevelEXP)
-                    if level then break end
-                end
+            local ReplicaClient = require(game:GetService("ReplicatedStorage").Shared.ReplicaClient)
+            local replica = ReplicaClient.GetOne("PlayerData")
+            if replica and replica.Data then
+                level = tonumber(replica.Data.Level)
+                curExp = tonumber(replica.Data.EXP)
+                maxExp = tonumber(replica.Data.MaxEXP or replica.Data.NextLevelEXP)
             end
         end)
     end
@@ -10097,10 +10147,11 @@ installMacroHook = function()
                     table.insert(mList, {time = currentTime, type = "Place", slot = args[3], pos = p, wave = curWave})
                 end
             elseif action == "VoteStart" or (action == "Response" and args[3] == true and (function()
-                for _, value in pairs(getgc(true)) do
-                    if type(value) == "table" and rawget(value, "Token") == "VotePrompt"
-                        and tostring(rawget(value, "Id")) == tostring(args[1]) then return true end
-                end
+                pcall(function()
+                    local ReplicaClient = require(game:GetService("ReplicatedStorage").Shared.ReplicaClient)
+                    local voteReplica = ReplicaClient.GetOne("VotePrompt")
+                    if voteReplica and tostring(voteReplica.Id) == tostring(args[1]) then return true end
+                end)
                 return false
             end)()) then
                 local curWave = lastStateInfo and lastStateInfo.Wave or 0
@@ -11079,11 +11130,11 @@ local function expeditionUseHotbarItem(item, gameUnitId)
     require(FusionPackage.Shared).SelectedHotbarIndex:set(item.slot)
     task.wait(0.35)
     local abilityId
-    for _, value in ipairs(getgc(true)) do
-        if type(value) == "table" and rawget(value, "Id") and rawget(value, "Token") == "AbilityInput" then
-            if not abilityId or value.Id > abilityId then abilityId = value.Id end
-        end
-    end
+    pcall(function()
+        local ReplicaClient = require(ReplicatedStorage.Shared.ReplicaClient)
+        local replica = ReplicaClient.GetOne("AbilityInput")
+        if replica then abilityId = replica.Id end
+    end)
     if not abilityId then return false, "AbilityInput replica missing" end
     ReplicatedStorage.RemoteEvents.ReplicaSignal:FireServer(abilityId, "Response", gameUnitId)
     return true
@@ -11149,11 +11200,11 @@ local function expeditionPlaceUsingMacroRemote(slot, cframe)
 
     local replicaId = getgenv().CachedGamePlayerDataId
     if not replicaId then
-        for _, value in pairs(getgc(true)) do
-            if type(value) == "table" and rawget(value, "Id") and rawget(value, "Token") == "GamePlayerData" then
-                if not replicaId or value.Id > replicaId then replicaId = value.Id end
-            end
-        end
+        pcall(function()
+            local ReplicaClient = require(ReplicatedStorage.Shared.ReplicaClient)
+            local replica = ReplicaClient.GetOne("GamePlayerData")
+            if replica then replicaId = replica.Id end
+        end)
         getgenv().CachedGamePlayerDataId = replicaId
     end
     if not replicaId then return false end
