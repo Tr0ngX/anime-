@@ -4176,6 +4176,80 @@ local function updateBlackScreenScale()
 end
 updateBlackScreenScale()
 if workspace.CurrentCamera then workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(updateBlackScreenScale) end
+local function getPlayerExpInfo()
+    local level, curExp, maxExp, rawExpText = nil, nil, nil, nil
+    pcall(function()
+        local pGui = game.Players.LocalPlayer:FindFirstChild("PlayerGui")
+        if pGui then
+            local bottomHUD = pGui:FindFirstChild("BottomHUD")
+            if bottomHUD then
+                for _, descendant in ipairs(bottomHUD:GetDescendants()) do
+                    if descendant:IsA("TextLabel") and descendant.Text ~= "" then
+                        local text = descendant.Text:gsub("<[^>]+>", "")
+                        if text:find("Lvl") and text:find("XP") then
+                            rawExpText = text
+                            break
+                        end
+                    end
+                end
+            end
+            if not rawExpText then
+                for _, descendant in ipairs(pGui:GetDescendants()) do
+                    if descendant:IsA("TextLabel") and descendant.Text ~= "" then
+                        local text = descendant.Text:gsub("<[^>]+>", "")
+                        if text:find("Lvl") and text:find("XP") then
+                            rawExpText = text
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    if rawExpText then
+        local lvlStr, curStr, maxStr = rawExpText:match("Lvl%s+(%d+)%s*%(%s*([%d,]+)%s*/%s*([%d,]+)%s*XP%s*%)")
+        if lvlStr and curStr and maxStr then
+            level = tonumber(lvlStr)
+            curExp = tonumber((curStr:gsub(",", "")))
+            maxExp = tonumber((maxStr:gsub(",", "")))
+            return level, curExp, maxExp, rawExpText
+        end
+    end
+
+    pcall(function()
+        local pd = Fusion.peek(Dependencies.PlayerData)
+        if type(pd) == "table" then
+            local lvlVal = Fusion.peek(pd.Level) or pd.Level
+            local expVal = Fusion.peek(pd.EXP) or pd.EXP
+            local maxExpVal = Fusion.peek(pd.MaxEXP) or Fusion.peek(pd.NextLevelEXP) or pd.MaxEXP or pd.NextLevelEXP
+            level = tonumber(lvlVal)
+            curExp = tonumber(expVal)
+            maxExp = tonumber(maxExpVal)
+        end
+    end)
+
+    if not level then
+        pcall(function()
+            for _, v in pairs(getgc(true)) do
+                if type(v) == "table" and rawget(v, "Data") and type(rawget(v, "Data")) == "table" and rawget(v.Data, "Level") then
+                    level = tonumber(v.Data.Level)
+                    curExp = tonumber(v.Data.EXP)
+                    maxExp = tonumber(v.Data.MaxEXP or v.Data.NextLevelEXP)
+                    if level then break end
+                end
+            end
+        end)
+    end
+
+    return level, curExp, maxExp, rawExpText
+end
+
+local function snapshotPlayerExp()
+    local level, curExp = getPlayerExpInfo()
+    return curExp
+end
+
 local blackTitle = Instance.new("TextLabel", blackPanel)
 blackTitle.AnchorPoint = Vector2.new(0.5, 0)
 blackTitle.Position = UDim2.new(0.5, 0, 0, 24)
@@ -4216,6 +4290,22 @@ blackPlayerExp.Text = "Player Level: --"
 blackPlayerExp.TextColor3 = Color3.fromRGB(80, 227, 194)
 blackPlayerExp.TextSize = 13
 blackPlayerExp.Font = Enum.Font.GothamBold
+
+pcall(function()
+    local lvl, curExp, maxExp, rawExpText = getPlayerExpInfo()
+    if lvl and curExp then
+        if maxExp and maxExp > 0 then
+            local ratio = math.clamp(curExp / maxExp, 0, 1)
+            local filled = math.floor(ratio * 12 + 0.5)
+            local bar = string.rep("▰", filled) .. string.rep("▱", 12 - filled) .. string.format(" %d%%", math.floor(ratio * 100))
+            blackPlayerExp.Text = string.format("Lvl %s  %s  (%s/%s XP)", tostring(lvl), bar, formatNumber(curExp), formatNumber(maxExp))
+        else
+            blackPlayerExp.Text = string.format("Lvl %s (%s EXP)", tostring(lvl), formatNumber(curExp))
+        end
+    elseif rawExpText then
+        blackPlayerExp.Text = rawExpText
+    end
+end)
 
 local blackLive = Instance.new("TextLabel", blackPanel)
 blackLive.AnchorPoint = Vector2.new(0.5, 0)
@@ -4651,7 +4741,7 @@ local function refreshBlackRewards()
     for _, reward in ipairs(rewards) do addBlackRewardCard(reward) end
 end
 if not safeParentScreenGui(blackScreenGui) then
-    blackScreenGui:Destroy()
+    if blackScreenGui then pcall(function() blackScreenGui:Destroy() end) end
     return
 end
 local lastBlackScreenInputAt = tick()
@@ -4750,7 +4840,7 @@ ToggleBtn.MouseButton1Click:Connect(function()
     task.wait(0.1)
     game:GetService("VirtualInputManager"):SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
 end)
-if not safeParentScreenGui(MobileGui) then MobileGui:Destroy() end
+if not safeParentScreenGui(MobileGui) then if MobileGui then pcall(function() MobileGui:Destroy() end) end end
 Tabs.Settings:AddToggle("MobileToggleBtn", {Title = "Nút Mở UI (Cho Mobile)", Default = appConfig.MobileToggle}):OnChanged(function(v)
     appConfig.MobileToggle = v
     MobileGui.Enabled = v
