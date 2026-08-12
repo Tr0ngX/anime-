@@ -21,11 +21,17 @@ do
     earlyState.disconnectedErrorConnections = earlyState.disconnectedErrorConnections or 0
 
     if typeof(getconnections) == "function" then
-        for _, connection in ipairs(getconnections(ScriptContext.Error)) do
-            if pcall(function() connection:Disconnect() end) then
-                earlyState.disconnectedErrorConnections += 1
+        pcall(function()
+            for _, connection in ipairs(getconnections(ScriptContext.Error)) do
+                if connection then
+                    pcall(function()
+                        if typeof(connection.Disable) == "function" then connection:Disable() end
+                        if typeof(connection.Disconnect) == "function" then connection:Disconnect() end
+                    end)
+                    earlyState.disconnectedErrorConnections += 1
+                end
             end
-        end
+        end)
     end
     if not earlyState.hookedNamecall and typeof(hookmetamethod) == "function" and typeof(newcclosure) == "function" then
         local oldNamecall
@@ -251,18 +257,20 @@ local function disconnectErrorConnections(source)
         return 0
     end
     local disconnected = 0
-    for _, connection in ipairs(getconnections(ScriptContext.Error)) do
-        local ok = false
-        if connection ~= diagnosticConnection then
-            ok = pcall(function()
-                connection:Disconnect()
-            end)
+    pcall(function()
+        for _, connection in ipairs(getconnections(ScriptContext.Error)) do
+            if connection and connection ~= diagnosticConnection then
+                local ok = pcall(function()
+                    if typeof(connection.Disable) == "function" then connection:Disable() end
+                    if typeof(connection.Disconnect) == "function" then connection:Disconnect() end
+                end)
+                if ok then
+                    disconnected += 1
+                    state.disconnectedErrorConnections += 1
+                end
+            end
         end
-        if ok then
-            disconnected += 1
-            state.disconnectedErrorConnections += 1
-        end
-    end
+    end)
     if disconnected > 0 and not (source == "watchdog" and disconnected <= 1) then
         log(("%s disconnected %d ScriptContext.Error connection(s), total=%d"):format(
             source,
