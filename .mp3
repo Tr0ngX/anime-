@@ -4,6 +4,27 @@ if not allowedGameIds[game.GameId] then
     return
 end
 
+-- Global Debug Mode System (Luôn luôn MẶC ĐỊNH LÀ OFF)
+getgenv().AnimeExpeditionsDebugMode = false
+local _originalPrint = print
+local _originalWarn = warn
+
+local function debugPrint(...)
+    if getgenv().AnimeExpeditionsDebugMode then
+        _originalPrint(...)
+    end
+end
+
+local function debugWarn(...)
+    if getgenv().AnimeExpeditionsDebugMode then
+        _originalWarn(...)
+    end
+end
+
+-- Override global log functions locally for this script scope
+local print = debugPrint
+local warn = debugWarn
+
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -89,8 +110,7 @@ do
                 local looksLikeKick = type(callback) ~= "function"
                 if type(callback) == "function" and debug and typeof(debug.getconstants) == "function" then
                     local ok, constants = pcall(debug.getconstants, callback)
-                    looksLikeKick = not ok
-                    if ok then
+                    if ok and type(constants) == "table" then
                         for _, constant in ipairs(constants) do
                             if type(constant) == "string" and constant:lower():find("kick", 1, true) then looksLikeKick = true break end
                         end
@@ -176,7 +196,7 @@ state.errorConnectionBlocks = state.errorConnectionBlocks or 0
 state.disconnectedErrorConnections = state.disconnectedErrorConnections or 0
 local diagnosticConnection
 local function log(message)
-    warn(("[KickBlock] %s"):format(message))
+    debugWarn(("[KickBlock] %s"):format(message))
 end
 local function describeSource(source)
     if typeof(source) ~= "Instance" then
@@ -275,88 +295,119 @@ local function isBlockedKick(self)
 end
 disconnectErrorConnections("startup")
 connectDiagnostic()
-if not state.hookedNamecall and typeof(hookmetamethod) == "function" and typeof(newcclosure) == "function" and typeof(checkcaller) == "function" then
-    local oldNamecall
-    oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-        local method = getnamecallmethod()
-        local args = {...}
-        if self == ScriptContext.Error and (method == "Connect" or method == "Once") and not checkcaller() then
-            state.errorConnectionBlocks += 1
-            log(("blocked ScriptContext.Error:%s listener, blocked=%d"):format(method, state.errorConnectionBlocks))
-            return oldNamecall(self, function() end)
-        end
-        if self == LocalPlayer and method == "Kick" then
-            state.kickAttempts += 1
-            if not checkcaller() and isBlockedKick(self) then
-                state.kickBlocks += 1
-                log(("blocked LocalPlayer:Kick(%q), blocked=%d"):format(tostring(args[1]), state.kickBlocks))
-                return nil
+-- Lazy Load Hooks để tránh ngợp CPU / FPS Drop lúc khởi chạy script
+task.spawn(function()
+    -- Step 1: Hook quan trọng nhất (__namecall) cài đặt ngay lập tức
+    if not state.hookedNamecall and typeof(hookmetamethod) == "function" and typeof(newcclosure) == "function" and typeof(checkcaller) == "function" then
+        local oldNamecall
+        oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+            local method = getnamecallmethod()
+            if self == ScriptContext.Error and (method == "Connect" or method == "Once") and not checkcaller() then
+                state.errorConnectionBlocks += 1
+                log(("blocked ScriptContext.Error:%s listener, blocked=%d"):format(method, state.errorConnectionBlocks))
+                return oldNamecall(self, function() end)
             end
-        end
-        return oldNamecall(self, ...)
-    end))
-    state.hookedNamecall = true
-    log("installed __namecall Kick hook")
-end
-if not state.hookedIndexKick and typeof(hookmetamethod) == "function" and typeof(newcclosure) == "function" then
-    local oldIndex
-    oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
-        if self == LocalPlayer and key == "Kick" then
-            return function(player, reason, ...)
+            if self == LocalPlayer and method == "Kick" then
                 state.kickAttempts += 1
-                if isBlockedKick(player) then
+                if not checkcaller() and isBlockedKick(self) then
                     state.kickBlocks += 1
-                    log(("blocked LocalPlayer.Kick(LocalPlayer, %q), blocked=%d"):format(tostring(reason), state.kickBlocks))
-                    return nil
-                end
-                return oldIndex(self, key)(player, reason, ...)
-            end
-        end
-        return oldIndex(self, key)
-    end))
-    state.hookedIndexKick = true
-    log("installed __index LocalPlayer.Kick hook")
-end
-if not state.hookedFunctionKick and typeof(hookfunction) == "function" and typeof(newcclosure) == "function" then
-    pcall(function()
-        local oldKick
-        oldKick = hookfunction(LocalPlayer.Kick, newcclosure(function(self, reason, ...)
-            if self == LocalPlayer then
-                state.kickAttempts += 1
-                if isBlockedKick(self) then
-                    state.kickBlocks += 1
-                    log(("blocked direct LocalPlayer.Kick(%q), blocked=%d"):format(tostring(reason), state.kickBlocks))
+                    local args = {...}
+                    log(("blocked LocalPlayer:Kick(%q), blocked=%d"):format(tostring(args[1]), state.kickBlocks))
                     return nil
                 end
             end
-            return oldKick(self, reason, ...)
+            return oldNamecall(self, ...)
         end))
-        state.hookedFunctionKick = true
-        log("installed direct Kick hook")
-    end)
-end
-if not state.hookedTaskDelay and typeof(hookfunction) == "function" and typeof(newcclosure) == "function" then
-    pcall(function()
-        local oldDelay
-        oldDelay = hookfunction(task.delay, newcclosure(function(delayTime, callback, ...)
-            local numericDelay = tonumber(delayTime)
-            if numericDelay and numericDelay >= 30 and numericDelay <= 60 and callbackLooksLikeKick(callback) then
-                state.delayBlocks += 1
-                log(("blocked suspicious task.delay(%s), delayBlocks=%d"):format(tostring(delayTime), state.delayBlocks))
-                return task.spawn(function() end)
+        state.hookedNamecall = true
+        log("installed __namecall Kick hook")
+    end
+
+    task.wait(0.05) -- Hoãn 50ms cài đặt hook phụ tiếp theo
+
+    -- Step 2: Lazy Load __index hook
+    if not state.hookedIndexKick and typeof(hookmetamethod) == "function" and typeof(newcclosure) == "function" then
+        local oldIndex
+        oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
+            if self == LocalPlayer and key == "Kick" then
+                return function(player, reason, ...)
+                    state.kickAttempts += 1
+                    if isBlockedKick(player) then
+                        state.kickBlocks += 1
+                        log(("blocked LocalPlayer.Kick(LocalPlayer, %q), blocked=%d"):format(tostring(reason), state.kickBlocks))
+                        return nil
+                    end
+                    return oldIndex(self, key)(player, reason, ...)
+                end
             end
-            return oldDelay(delayTime, callback, ...)
+            return oldIndex(self, key)
         end))
-        state.hookedTaskDelay = true
-        log("installed task.delay hook")
-    end)
-end
+        state.hookedIndexKick = true
+        log("installed __index LocalPlayer.Kick hook")
+    end
+
+    task.wait(0.05) -- Hoãn tiếp 50ms
+
+    -- Step 3: Lazy Load direct LocalPlayer.Kick hook & ScriptContext.Error.Connect hook
+    if not state.hookedFunctionKick and typeof(hookfunction) == "function" and typeof(newcclosure) == "function" then
+        pcall(function()
+            local oldKick
+            oldKick = hookfunction(LocalPlayer.Kick, newcclosure(function(self, reason, ...)
+                if self == LocalPlayer then
+                    state.kickAttempts += 1
+                    if isBlockedKick(self) then
+                        state.kickBlocks += 1
+                        log(("blocked direct LocalPlayer.Kick(%q), blocked=%d"):format(tostring(reason), state.kickBlocks))
+                        return nil
+                    end
+                end
+                return oldKick(self, reason, ...)
+            end))
+            state.hookedFunctionKick = true
+            log("installed direct Kick hook")
+        end)
+    end
+
+    if not state.hookedScriptContextErrorConnect and typeof(hookfunction) == "function" and typeof(newcclosure) == "function" then
+        pcall(function()
+            local oldErrorConnect
+            oldErrorConnect = hookfunction(ScriptContext.Error.Connect, newcclosure(function(self, ...)
+                if self == ScriptContext.Error and (typeof(checkcaller) ~= "function" or not checkcaller()) then
+                    state.errorConnectionBlocks += 1
+                    log("blocked direct ScriptContext.Error.Connect listener, blocked=" .. tostring(state.errorConnectionBlocks))
+                    return { Connected = true, Disconnect = function() end }
+                end
+                return oldErrorConnect(self, ...)
+            end))
+            state.hookedScriptContextErrorConnect = true
+            log("installed direct ScriptContext.Error.Connect hook")
+        end)
+    end
+
+    task.wait(0.05) -- Hoãn 50ms cuối cùng
+
+    -- Step 4: Lazy Load task.delay hook
+    if not state.hookedTaskDelay and typeof(hookfunction) == "function" and typeof(newcclosure) == "function" then
+        pcall(function()
+            local oldDelay
+            oldDelay = hookfunction(task.delay, newcclosure(function(delayTime, callback, ...)
+                local numericDelay = tonumber(delayTime)
+                if numericDelay and numericDelay >= 30 and numericDelay <= 60 and callbackLooksLikeKick(callback) then
+                    state.delayBlocks += 1
+                    log(("blocked suspicious task.delay(%s), delayBlocks=%d"):format(tostring(delayTime), state.delayBlocks))
+                    return task.spawn(function() end)
+                end
+                return oldDelay(delayTime, callback, ...)
+            end))
+            state.hookedTaskDelay = true
+            log("installed task.delay hook")
+        end)
+    end
+end)
 if not state.watchdogRunning then
     state.watchdogRunning = true
     task.spawn(function()
         while state.enabled do
             task.wait(2)
-            disconnectErrorConnections("watchdog")
             if not diagnosticConnection or not diagnosticConnection.Connected then connectDiagnostic() end
         end
         state.watchdogRunning = false
@@ -495,6 +546,7 @@ local appConfig = {
     autoClaimAchievements = false,
     autoRedeemCodes = false,
     hidePlayerNames = false,
+    debugMode = false,
     fixLagEnabled = false,
     fpsCap = 60,
     modskinSelectedAoEColor = "AOEColorSunshine",
@@ -523,7 +575,7 @@ local lobbyConfigKeys = {
     "EventAuto", "QuestAuto", "storyMapMacros",
     "autoChallengeEnabled", "autoDailyChallengeEnabled", "challengeAutoSelectedSlots", "challengeMapMacros", "challengeActiveTarget", "challengeSkippedSlots",
     "AutoJoin", "autoJoinEnabled", "autoJoinTeamEnabled", "autoJoinMode", "autoCraftEnabled", "autoCraftItems", "autoExpeditionCraftEnabled", "autoExpeditionCraftItems", "autoShopEnabled", "ShopSelections", "TeamSelections",
-    "autoClaimQuests", "autoClaimBP", "autoClaimCalendar", "autoClaimMilestones", "autoClaimIndex", "autoClaimAchievements", "autoRedeemCodes", "hidePlayerNames", "fixLagEnabled", "fpsCap", "autoLeaveAfterMinutes", "autoLeaveAfterMinutesValue", "AutoStatRoll"
+    "autoClaimQuests", "autoClaimBP", "autoClaimCalendar", "autoClaimMilestones", "autoClaimIndex", "autoClaimAchievements", "autoRedeemCodes", "hidePlayerNames", "debugMode", "fixLagEnabled", "fpsCap", "autoLeaveAfterMinutes", "autoLeaveAfterMinutesValue", "AutoStatRoll"
 }
 local ingameConfigKeys = {
     "autoRecordEnabled", "autoPlayEnabled", "skipExpeditionDefenseMacro", "expeditionAutoVoteStart", "autoRestartInf", "restartWaveNum", "autoLeaveSpriteMax", "autoLeaveExpeditionScrapMax", "expeditionScrapCraftPending", "expeditionScrapCraftPendingSince", "autoLeaveOnDefeat", "autoLeaveOnPlayerJoin", "AntiAFK", "MobileToggle", "WebhookUrl", "webhookWinEnabled", "webhookSummonEnabled", "ExpeditionAuto", "LobbyMaintenance"
@@ -611,6 +663,7 @@ local function saveConfig()
 end
 logInit("Đang tải Config...")
 loadConfig()
+getgenv().AnimeExpeditionsDebugMode = appConfig.debugMode == true
 appConfig.Language = normalizeLanguage(appConfig.Language)
 if getgenv().AnimeExpeditionsCleanLegacyIngameConfig or getgenv().AnimeExpeditionsMigrateAutoSave then
     saveConfig()
@@ -3537,7 +3590,7 @@ getgenv().AnimeExpeditionsMacroShare.ShowImportPopup = function(bundle)
     end
 
     local old = CoreGui:FindFirstChild("AnimeExpeditionsMacroImport")
-    if old then old:Destroy() end
+    if old and typeof(old) == "Instance" then pcall(function() old:Destroy() end) end
     local gui = Instance.new("ScreenGui")
     gui.Name = "AnimeExpeditionsMacroImport"
     gui.DisplayOrder = 10000
@@ -3661,7 +3714,7 @@ getgenv().AnimeExpeditionsMacroShare.ShowImportPopup = function(bundle)
     cancel.TextSize = 13
     Instance.new("UICorner", cancel).CornerRadius = UDim.new(0, 7)
     cancel.Parent = panel
-    cancel.Activated:Connect(function() gui:Destroy() end)
+    cancel.Activated:Connect(function() if gui and typeof(gui) == "Instance" then pcall(function() gui:Destroy() end) end end)
     local confirm = Instance.new("TextButton")
     confirm.BackgroundColor3 = Color3.fromRGB(86, 118, 255)
     confirm.Position = UDim2.new(0.38, 22, 1, -54)
@@ -3685,7 +3738,7 @@ getgenv().AnimeExpeditionsMacroShare.ShowImportPopup = function(bundle)
             return
         end
         saveConfig()
-        gui:Destroy()
+        if gui and typeof(gui) == "Instance" then pcall(function() gui:Destroy() end) end
         Fluent:Notify({Title = "Import thành công", Content = string.format(localizeText("Đã import %d Macro; mục không tick được giữ nguyên."), imported), Duration = 6})
     end)
 end
@@ -3941,6 +3994,15 @@ Tabs.Settings:AddToggle("AntiAFK", {Title = "Anti AFK", Default = appConfig.Anti
     appConfig.AntiAFK = v
     saveConfig()
 end)
+Tabs.Settings:AddToggle("DebugMode", {
+    Title = "Debug Mode",
+    Description = "Bật/tắt chế độ ghi log chi tiết (Debug Mode) để kiểm tra hoạt động script.",
+    Default = appConfig.debugMode == true
+}):OnChanged(function(v)
+    appConfig.debugMode = v
+    getgenv().AnimeExpeditionsDebugMode = v
+    saveConfig()
+end)
 Tabs.Settings:AddToggle("AutoVoteStartExpedition", {
     Title = "Auto Vote Start (Chỉ Expedition)",
     Description = "Vào Expedition sẽ tạm bật; khi rời sẽ khôi phục trạng thái Auto Vote Start trước đó.",
@@ -4187,7 +4249,7 @@ task.spawn(function()
         if appConfig.AntiAFK then
             if IsAFKChamberVisible() then
                 ReturnFromAFKChamber()
-            elseif tick() - lastAntiAfkInputAt >= 20 then
+            elseif tick() - lastAntiAfkInputAt >= 300 then
                 PulseAntiAFKInput()
             end
         end
@@ -4788,7 +4850,7 @@ local function addBlackRewardCard(reward)
 end
 local function refreshBlackRewards()
     for _, child in ipairs(blackRewards:GetChildren()) do
-        if child.Name == "RewardCard" then child:Destroy() end
+        if child and child.Name == "RewardCard" then pcall(function() child:Destroy() end) end
     end
     local rewards = {}
     for _, reward in pairs(blackReceivedRewards) do
@@ -4898,7 +4960,7 @@ ToggleBtn.MouseButton1Click:Connect(function()
     task.wait(0.1)
     game:GetService("VirtualInputManager"):SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
 end)
-if not safeParentScreenGui(MobileGui) then if MobileGui then pcall(function() MobileGui:Destroy() end) end end
+if not safeParentScreenGui(MobileGui) then if MobileGui and typeof(MobileGui) == "Instance" then pcall(function() MobileGui:Destroy() end) end end
 Tabs.Settings:AddToggle("MobileToggleBtn", {Title = "Nút Mở UI (Cho Mobile)", Default = appConfig.MobileToggle}):OnChanged(function(v)
     appConfig.MobileToggle = v
     MobileGui.Enabled = v
