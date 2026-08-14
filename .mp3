@@ -553,7 +553,11 @@ local appConfig = {
     hidePlayerNames = false,
     debugMode = false,
     fixLagEnabled = false,
+    hideAllModels = false,
     fpsCap = 60,
+    UITheme = "Dark",
+    UIAcrylic = false,
+    UITransparency = false,
     modskinSelectedAoEColor = "AOEColorSunshine",
     AutoStatRoll = {Enabled = false, Rarities = {}, Stats = {}, Grades = {Z = true, SSS = true}, Webhook = true},
     ExpeditionAuto = nil,
@@ -580,7 +584,7 @@ local lobbyConfigKeys = {
     "EventAuto", "QuestAuto", "storyMapMacros",
     "autoChallengeEnabled", "autoDailyChallengeEnabled", "challengeAutoSelectedSlots", "challengeMapMacros", "challengeActiveTarget", "challengeSkippedSlots",
     "AutoJoin", "autoJoinEnabled", "autoJoinTeamEnabled", "autoJoinMode", "autoCraftEnabled", "autoCraftItems", "autoExpeditionCraftEnabled", "autoExpeditionCraftItems", "autoShopEnabled", "ShopSelections", "TeamSelections",
-    "autoClaimQuests", "autoClaimBP", "autoClaimCalendar", "autoClaimMilestones", "autoClaimIndex", "autoClaimAchievements", "autoRedeemCodes", "hidePlayerNames", "debugMode", "fixLagEnabled", "fpsCap", "autoLeaveAfterMinutes", "autoLeaveAfterMinutesValue", "AutoStatRoll"
+    "autoClaimQuests", "autoClaimBP", "autoClaimCalendar", "autoClaimMilestones", "autoClaimIndex", "autoClaimAchievements", "autoRedeemCodes", "hidePlayerNames", "hideAllModels", "debugMode", "fixLagEnabled", "fpsCap", "UITheme", "UIAcrylic", "UITransparency", "autoLeaveAfterMinutes", "autoLeaveAfterMinutesValue", "AutoStatRoll"
 }
 local ingameConfigKeys = {
     "autoRecordEnabled", "autoPlayEnabled", "skipExpeditionDefenseMacro", "expeditionAutoVoteStart", "autoRestartInf", "restartWaveNum", "autoLeaveSpriteMax", "autoLeaveExpeditionScrapMax", "expeditionScrapCraftPending", "expeditionScrapCraftPendingSince", "autoLeaveOnDefeat", "autoLeaveOnPlayerJoin", "AntiAFK", "MobileToggle", "WebhookUrl", "webhookWinEnabled", "webhookSummonEnabled", "ExpeditionAuto", "LobbyMaintenance"
@@ -866,7 +870,29 @@ local englishTranslations = {
     ["Trạng Thái Join"] = "Join Status",
     ["Đang khởi tạo scheduler..."] = "Initializing scheduler...",
     ["Bật Auto Join Map Đang Chọn"] = "Enable Auto Join for Selected Map",
+    ["Giao Diện & Tùy Biến"] = "Appearance & Themes",
+    ["Theme Giao Diện"] = "UI Theme",
+    ["Chọn màu sắc chủ đề cho Menu (Dark, Darker, Light, Aqua, Amethyst, Rose)"] = "Select UI theme color (Dark, Darker, Light, Aqua, Amethyst, Rose)",
+    ["Hiệu ứng Mờ Kính (Acrylic Blur)"] = "Acrylic Blur Effect",
+    ["Bật/tắt hiệu ứng làm mờ nền kính Acrylic"] = "Toggle Acrylic glass blur effect",
+    ["Nền Trong Suốt (Transparency)"] = "Transparency Effect",
+    ["Bật/tắt độ trong suốt cho giao diện"] = "Toggle transparency for the interface",
+    ["Hiệu Năng & Tối Ưu"] = "Performance & Optimization",
+    ["Xóa/Ẩn Toàn Bộ Model (Players, Units, Enemies)"] = "Hide All Models (Players, Units, Enemies)",
+    ["Ẩn model nhân vật của bạn, người chơi khác, unit đặt ra và quái vật để tối ưu FPS tối đa"] = "Hides character models, other players, placed units and spawned enemies for maximum FPS",
+    ["Hệ Thống & Khác"] = "System & Miscellaneous",
     ["Cài Đặt Đội Hình"] = "Team Setup",
+    ["Quản Lý & Lưu Đội Hình"] = "Team Management & Presets",
+    ["Hướng Dẫn Đội Hình"] = "Team Presets Guide",
+    ["Lưu đội hình đang trang bị vào Slot, đặt tên hoặc nạp ngay lập tức bất cứ lúc nào."] = "Save equipped team to a Slot, set name or load immediately anytime.",
+    ["Thông Tin Slot Đang Chọn"] = "Selected Slot Info",
+    ["Chọn Slot Team"] = "Select Team Slot",
+    ["Đặt Tên Team (Team Name)"] = "Set Team Name",
+    ["Lưu Team Hiện Tại (Save Current Team)"] = "Save Current Team",
+    ["Đổi Tên Team (Rename Team)"] = "Rename Team",
+    ["Nạp Team Này Luôn (Load Team Now)"] = "Load Team Now",
+    ["Tự Động Nạp Team Cho Từng Map"] = "Auto Load Team By Map",
+    ["Cài Đặt Đội Hình Cho Map"] = "Map Team Setup",
     ["Chọn Team riêng cho từng Map; Auto Load Team dùng cấu hình này trước khi vào trận."] = "Choose a Team for each Map; Auto Load Team applies it before entering a match.",
     ["Tự động nạp Team (Auto Load Team)"] = "Auto Load Team",
     ["Chọn Map"] = "Select Map",
@@ -1949,6 +1975,39 @@ if not Fluent then
         Fluent = compile(res.Body)()
     end
 end
+if Fluent then
+    local setIdentity = setthreadidentity or set_thread_identity
+    local getIdentity = getthreadidentity or get_thread_identity
+    if type(Fluent.SafeCallback) == "function" then
+        local origSafeCallback = Fluent.SafeCallback
+        Fluent.SafeCallback = function(self, callback, ...)
+            local args = table.pack(...)
+            if type(setIdentity) == "function" then pcall(setIdentity, 8) end
+            return origSafeCallback(self, callback, table.unpack(args, 1, args.n))
+        end
+    end
+    local function wrapFluentIdentityMethod(methodName)
+        local orig = Fluent[methodName]
+        if type(orig) == "function" then
+            Fluent[methodName] = function(self, ...)
+                local args = table.pack(...)
+                local prevId
+                if type(getIdentity) == "function" then pcall(function() prevId = getIdentity() end) end
+                if type(setIdentity) == "function" then pcall(setIdentity, 8) end
+                local results = table.pack(pcall(function()
+                    return orig(self, table.unpack(args, 1, args.n))
+                end))
+                if type(setIdentity) == "function" and prevId then pcall(setIdentity, prevId) end
+                if results[1] then
+                    return table.unpack(results, 2, results.n)
+                end
+            end
+        end
+    end
+    for _, m in ipairs({"SetTheme", "ToggleAcrylic", "ToggleTransparency"}) do
+        wrapFluentIdentityMethod(m)
+    end
+end
 local presentationFields = {"Title", "Content", "Description", "Placeholder"}
 local wrappedControls = setmetatable({}, {__mode = "k"})
 local function localizeOptions(options)
@@ -1974,12 +2033,28 @@ local function wrapControl(control)
         local original = control[methodName]
         if type(original) == "function" then
             control[methodName] = function(self, value, ...)
+                local setIdentity = setthreadidentity or set_thread_identity
+                if type(setIdentity) == "function" then pcall(setIdentity, 8) end
                 return original(self, localizeText(value), ...)
             end
         end
     end
-    for _, methodName in ipairs({"SetDesc", "SetTitle"}) do
+    for _, methodName in ipairs({"SetDesc", "SetTitle", "SetValue"}) do
         wrapTextMethod(methodName)
+    end
+    local originalOnChanged = control.OnChanged
+    if type(originalOnChanged) == "function" then
+        control.OnChanged = function(self, callback, ...)
+            local wrappedCb = callback
+            if type(callback) == "function" then
+                wrappedCb = function(...)
+                    local setIdentity = setthreadidentity or set_thread_identity
+                    if type(setIdentity) == "function" then pcall(setIdentity, 8) end
+                    return callback(...)
+                end
+            end
+            return originalOnChanged(self, wrappedCb, ...)
+        end
     end
     return control
 end
@@ -2000,9 +2075,20 @@ local function wrapTab(tab)
                         end
                     end
                 end
-                local results = table.pack(original(self, table.unpack(arguments, 1, arguments.n)))
-                results[1] = wrapControl(results[1])
-                return table.unpack(results, 1, results.n)
+                local setIdentity = setthreadidentity or set_thread_identity
+                local getIdentity = getthreadidentity or get_thread_identity
+                local prevId
+                if type(getIdentity) == "function" then pcall(function() prevId = getIdentity() end) end
+                if type(setIdentity) == "function" then pcall(setIdentity, 8) end
+                local ok, res = pcall(function()
+                    return table.pack(original(self, table.unpack(arguments, 1, arguments.n)))
+                end)
+                if type(setIdentity) == "function" and prevId then pcall(setIdentity, prevId) end
+                if ok and res and res[1] then
+                    res[1] = wrapControl(res[1])
+                    return table.unpack(res, 1, res.n)
+                end
+                return nil
             end
         end
     end
@@ -2089,10 +2175,32 @@ do
             if type(window) == "table" then
                 if type(window.AddTab) == "function" then
                     local originalAddTab = window.AddTab
+                    local tabIconAliases = {
+                        ["sparkles"] = "wand",
+                        ["scroll-text"] = "scroll",
+                        ["wand-2"] = "wand",
+                        ["stars"] = "star",
+                        ["quests"] = "scroll",
+                    }
                     window.AddTab = function(windowSelf, tabOptions, ...)
-                        local tabResults = table.pack(originalAddTab(windowSelf, localizeOptions(tabOptions), ...))
-                        tabResults[1] = wrapTab(tabResults[1])
-                        return table.unpack(tabResults, 1, tabResults.n)
+                        local extraArgs = table.pack(...)
+                        local setIdentity = setthreadidentity or set_thread_identity
+                        local getIdentity = getthreadidentity or get_thread_identity
+                        local prevId
+                        if type(getIdentity) == "function" then pcall(function() prevId = getIdentity() end) end
+                        if type(setIdentity) == "function" then pcall(setIdentity, 8) end
+                        if type(tabOptions) == "table" and tabOptions.Icon and tabIconAliases[tabOptions.Icon] then
+                            tabOptions.Icon = tabIconAliases[tabOptions.Icon]
+                        end
+                        local ok, tabResults = pcall(function()
+                            return table.pack(originalAddTab(windowSelf, localizeOptions(tabOptions), table.unpack(extraArgs, 1, extraArgs.n)))
+                        end)
+                        if type(setIdentity) == "function" and prevId then pcall(setIdentity, prevId) end
+                        if ok and tabResults and tabResults[1] then
+                            tabResults[1] = wrapTab(tabResults[1])
+                            return table.unpack(tabResults, 1, tabResults.n)
+                        end
+                        return nil
                     end
                 end
 
@@ -2253,10 +2361,13 @@ local Window = Fluent:CreateWindow({
     SubTitle = "by Tr0ngX",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
-    Acrylic = false,
-    Theme = "Dark",
+    Acrylic = appConfig.UIAcrylic == true,
+    Theme = appConfig.UITheme or "Dark",
     MinimizeKey = Enum.KeyCode.LeftShift
 })
+if appConfig.UITransparency and Fluent.ToggleTransparency then
+    pcall(function() Fluent:ToggleTransparency(true) end)
+end
 
 
 task.defer(function()
@@ -2274,9 +2385,9 @@ end)
 local Tabs = {
     Search = Window:AddTab({ Title = "Tìm Kiếm", Icon = "search" }),
     Lobby = Window:AddTab({ Title = "Lobby Auto", Icon = "home" }),
-    Summon = Window:AddTab({ Title = "Auto Summon", Icon = "sparkles" }),
+    Summon = Window:AddTab({ Title = "Auto Summon", Icon = "wand" }),
     Event = Window:AddTab({ Title = "Auto Event", Icon = "calendar-days" }),
-    Quest = Window:AddTab({ Title = "Auto Quest", Icon = "scroll-text" }),
+    Quest = Window:AddTab({ Title = "Auto Quest", Icon = "scroll" }),
     Story = Window:AddTab({ Title = "Auto Story", Icon = "book-open" }),
     Challenge = Window:AddTab({ Title = "Auto Challenge", Icon = "swords" }),
     Shop = Window:AddTab({ Title = "Auto Shop", Icon = "shopping-cart" }),
@@ -2290,6 +2401,7 @@ local Tabs = {
     Settings = Window:AddTab({ Title = "Settings", Icon = "settings" }),
     Configs = Window:AddTab({ Title = "Configs", Icon = "folder" })
 }
+Tabs.Settings:AddSection("Giao Diện & Tùy Biến")
 Tabs.Settings:AddDropdown("Language", {
     Title = "Ngôn ngữ",
     Description = "English / Tiếng Việt",
@@ -2304,6 +2416,37 @@ Tabs.Settings:AddDropdown("Language", {
         Content = "Đã lưu ngôn ngữ. Hãy chạy lại script để cập nhật toàn bộ giao diện.",
         Duration = 7,
     })
+end)
+Tabs.Settings:AddDropdown("UIThemeSelect", {
+    Title = "Theme Giao Diện",
+    Description = "Chọn màu sắc chủ đề cho Menu (Dark, Darker, Light, Aqua, Amethyst, Rose)",
+    Values = {"Dark", "Darker", "Light", "Aqua", "Amethyst", "Rose"},
+    Multi = false,
+    Default = appConfig.UITheme or "Dark",
+}):OnChanged(function(themeName)
+    if themeName and themeName ~= "" then
+        appConfig.UITheme = themeName
+        pcall(function() Fluent:SetTheme(themeName) end)
+        saveConfig()
+    end
+end)
+Tabs.Settings:AddToggle("UIAcrylicToggle", {
+    Title = "Hiệu ứng Mờ Kính (Acrylic Blur)",
+    Description = "Bật/tắt hiệu ứng làm mờ nền kính Acrylic",
+    Default = appConfig.UIAcrylic == true,
+}):OnChanged(function(state)
+    appConfig.UIAcrylic = state
+    pcall(function() Fluent:ToggleAcrylic(state) end)
+    saveConfig()
+end)
+Tabs.Settings:AddToggle("UITransparencyToggle", {
+    Title = "Nền Trong Suốt (Transparency)",
+    Description = "Bật/tắt độ trong suốt cho giao diện",
+    Default = appConfig.UITransparency == true,
+}):OnChanged(function(state)
+    appConfig.UITransparency = state
+    pcall(function() Fluent:ToggleTransparency(state) end)
+    saveConfig()
 end)
 local paragraphUpdateErrors = setmetatable({}, {__mode = "k"})
 local function safeSetParagraphDesc(paragraph, description)
@@ -3219,39 +3362,196 @@ Tabs.Join:AddDropdown("JoinModeSelect", {
     saveConfig()
 end)
 
-Tabs.Team:AddParagraph({ Title = "Cài Đặt Đội Hình", Content = "Chọn Team riêng cho từng Map; Auto Load Team dùng cấu hình này trước khi vào trận." })
-Tabs.Team:AddToggle("ToggleAutoTeam", {Title = "Tự động nạp Team (Auto Load Team)", Default = appConfig.autoJoinTeamEnabled}):OnChanged(function(v)
-    appConfig.autoJoinTeamEnabled = v
-    saveConfig()
-end)
-do
-local allUniqueMaps = {}
-local seenMaps = {}
-for mode, maps in pairs(MapInfo.MapData or {}) do
-    if mode ~= "Trial" and type(maps) == "table" then
-    for mapId in pairs(maps) do
-        if not seenMaps[mapId] then
-            seenMaps[mapId] = true
-            table.insert(allUniqueMaps, mapId)
-        end
+    Tabs.Team:AddSection("Quản Lý & Lưu Đội Hình")
+    Tabs.Team:AddParagraph({
+        Title = "Hướng Dẫn Đội Hình",
+        Content = "Lưu đội hình đang trang bị vào Slot, đặt tên hoặc nạp ngay lập tức bất cứ lúc nào."
+    })
+
+    local selectedPresetSlot = "1"
+    local currentPresetNameInput = ""
+
+    local function getTeamPresetDetails(slot)
+        local slotStr = tostring(slot or 1)
+        local teamName = "Team #" .. slotStr
+        local unitNames = {}
+        pcall(function()
+            local pd = Fusion.peek(Dependencies.PlayerData)
+            if pd and pd.TeamData then
+                local tData = Fusion.peek(pd.TeamData)
+                if tData and tData[slotStr] then
+                    local entry = Fusion.peek(tData[slotStr])
+                    if entry then
+                        local nameVal = entry.Name and Fusion.peek(entry.Name)
+                        if nameVal and tostring(nameVal) ~= "" then
+                            teamName = tostring(nameVal)
+                        end
+                        local unitsVal = entry.Units and Fusion.peek(entry.Units)
+                        if type(unitsVal) == "table" then
+                            for i = 1, 6 do
+                                local uid = unitsVal[tostring(i)]
+                                if uid and tostring(uid) ~= "" then
+                                    local uBaseName = tostring(uid):match("^(.-)#") or tostring(uid)
+                                    table.insert(unitNames, uBaseName)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+        return teamName, unitNames
     end
+
+    local teamStatusPara = Tabs.Team:AddParagraph({
+        Title = "Thông Tin Slot Đang Chọn",
+        Content = "Đang tải thông tin đội hình..."
+    })
+
+    local function updateTeamStatusPara()
+        local name, units = getTeamPresetDetails(selectedPresetSlot)
+        local desc = string.format("Slot: %s | Tên: %s\nUnits (%d/6): %s",
+            selectedPresetSlot,
+            name,
+            #units,
+            #units > 0 and table.concat(units, ", ") or "Trống / Chưa lưu"
+        )
+        safeSetParagraphDesc(teamStatusPara, desc)
     end
-end
-table.sort(allUniqueMaps)
-for _, mapId in ipairs(allUniqueMaps) do
-    Tabs.Team:AddDropdown("TeamSelect_" .. mapId, {
-        Title = string.format(localizeText("Team cho %s"), mapId),
-        Values = {"1", "2", "3", "4", "5"},
+
+    local teamSlotDropdown = Tabs.Team:AddDropdown("TeamPresetSlotSelect", {
+        Title = "Chọn Slot Team",
+        Values = {"1", "2", "3", "4", "5", "6", "7", "8"},
         Multi = false,
-        Default = appConfig.TeamSelections[mapId] or nil
-    }):OnChanged(function(teamId)
-        if teamId then
-            appConfig.TeamSelections[mapId] = teamId
-            saveConfig()
+        Default = "1"
+    })
+    teamSlotDropdown:OnChanged(function(slot)
+        if slot then
+            selectedPresetSlot = tostring(slot)
+            updateTeamStatusPara()
         end
     end)
-end
-end
+
+    local teamNameInputObj = Tabs.Team:AddInput("TeamPresetNameInput", {
+        Title = "Đặt Tên Team (Team Name)",
+        Default = "",
+        Placeholder = "Nhập tên cho team (vd: Story, Raid, Boss, ...)",
+        Numeric = false,
+        Finished = false,
+        Callback = function(val)
+            currentPresetNameInput = tostring(val or "")
+        end
+    })
+
+    Tabs.Team:AddButton({
+        Title = "Lưu Team Hiện Tại (Save Current Team)",
+        Description = "Lưu đội hình & trang bị đang mang vào Slot đã chọn (kèm tên nếu có nhập)",
+        Callback = function()
+            local slotNum = tonumber(selectedPresetSlot) or 1
+            local ok, err = pcall(function()
+                Actions.SaveUnitTeam(slotNum, true)
+            end)
+            local nameToSet = currentPresetNameInput:match("^%s*(.-)%s*$")
+            if nameToSet and nameToSet ~= "" then
+                pcall(function()
+                    Actions.RenameUnitTeam(slotNum, nameToSet)
+                end)
+            end
+            task.delay(0.4, function()
+                updateTeamStatusPara()
+            end)
+            Fluent:Notify({
+                Title = "Lưu Team Thành Công",
+                Content = string.format("Đã lưu team hiện tại vào Slot %s%s!", tostring(slotNum), (nameToSet and nameToSet ~= "") and (" (\"" .. nameToSet .. "\")") or ""),
+                Duration = 4
+            })
+        end
+    })
+
+    Tabs.Team:AddButton({
+        Title = "Đổi Tên Team (Rename Team)",
+        Description = "Đổi tên của Slot đang chọn sang tên mới trong ô nhập",
+        Callback = function()
+            local slotNum = tonumber(selectedPresetSlot) or 1
+            local nameToSet = currentPresetNameInput:match("^%s*(.-)%s*$")
+            if not nameToSet or nameToSet == "" then
+                Fluent:Notify({
+                    Title = "Đổi Tên Thất Bại",
+                    Content = "Vui lòng nhập tên team vào ô trên trước khi đổi tên!",
+                    Duration = 4
+                })
+                return
+            end
+            pcall(function()
+                Actions.RenameUnitTeam(slotNum, nameToSet)
+            end)
+            task.delay(0.4, function()
+                updateTeamStatusPara()
+            end)
+            Fluent:Notify({
+                Title = "Đổi Tên Team",
+                Content = string.format("Đã đổi tên Slot %s thành \"%s\"!", tostring(slotNum), nameToSet),
+                Duration = 4
+            })
+        end
+    })
+
+    Tabs.Team:AddButton({
+        Title = "Nạp Team Này Luôn (Load Team Now)",
+        Description = "Lập tức nạp và trang bị đội hình từ Slot này vào nhân vật",
+        Callback = function()
+            local slotNum = tonumber(selectedPresetSlot) or 1
+            local ok, err = pcall(function()
+                Actions.LoadUnitTeam(slotNum, true)
+            end)
+            local name, units = getTeamPresetDetails(slotNum)
+            Fluent:Notify({
+                Title = "Nạp Team Thành Công",
+                Content = string.format("Đã nạp đội hình từ Slot %s (\"%s\")!", tostring(slotNum), name),
+                Duration = 4
+            })
+        end
+    })
+
+    task.spawn(function()
+        task.wait(1)
+        updateTeamStatusPara()
+    end)
+
+    Tabs.Team:AddSection("Tự Động Nạp Team Cho Từng Map")
+    Tabs.Team:AddParagraph({ Title = "Cài Đặt Đội Hình Cho Map", Content = "Chọn Team riêng cho từng Map; Auto Load Team dùng cấu hình này trước khi vào trận." })
+    Tabs.Team:AddToggle("ToggleAutoTeam", {Title = "Tự động nạp Team (Auto Load Team)", Default = appConfig.autoJoinTeamEnabled}):OnChanged(function(v)
+        appConfig.autoJoinTeamEnabled = v
+        saveConfig()
+    end)
+    do
+    local allUniqueMaps = {}
+    local seenMaps = {}
+    for mode, maps in pairs(MapInfo.MapData or {}) do
+        if mode ~= "Trial" and type(maps) == "table" then
+        for mapId in pairs(maps) do
+            if not seenMaps[mapId] then
+                seenMaps[mapId] = true
+                table.insert(allUniqueMaps, mapId)
+            end
+        end
+        end
+    end
+    table.sort(allUniqueMaps)
+    for _, mapId in ipairs(allUniqueMaps) do
+        Tabs.Team:AddDropdown("TeamSelect_" .. mapId, {
+            Title = string.format(localizeText("Team cho %s"), mapId),
+            Values = {"1", "2", "3", "4", "5", "6", "7", "8"},
+            Multi = false,
+            Default = appConfig.TeamSelections[mapId] or nil
+        }):OnChanged(function(teamId)
+            if teamId then
+                appConfig.TeamSelections[mapId] = teamId
+                saveConfig()
+            end
+        end)
+    end
+    end
 
 Tabs.Join:AddSection("Chọn Map")
 local function setJoinMap(mode, mapId, act, diff)
@@ -4112,6 +4412,27 @@ Tabs.Configs:AddButton({
     end
 })
 task.wait()
+Tabs.Settings:AddSection("Hiệu Năng & Tối Ưu")
+local function applyFPSCap(value)
+    local cap = math.clamp(math.floor(tonumber(value) or 60), 1, 360)
+    appConfig.fpsCap = cap
+    if not getgenv().AnimeExpeditionsAFKScreenActive and type(setfpscap) == "function" then
+        pcall(setfpscap, cap)
+    end
+    return cap
+end
+applyFPSCap(appConfig.fpsCap)
+Tabs.Settings:AddInput("FPSCap", {
+    Title = "Giới hạn FPS",
+    Default = tostring(appConfig.fpsCap),
+    Placeholder = "60",
+    Numeric = true,
+    Finished = true,
+    Callback = function(value)
+        applyFPSCap(value)
+        saveConfig()
+    end,
+})
 Tabs.Settings:AddToggle("HidePlayerNames", {Title = "Hide Player Names", Default = appConfig.hidePlayerNames}):OnChanged(function(v)
     appConfig.hidePlayerNames = v
     saveConfig()
@@ -4120,24 +4441,19 @@ Tabs.Settings:AddToggle("AntiAFK", {Title = "Anti AFK", Default = appConfig.Anti
     appConfig.AntiAFK = v
     saveConfig()
 end)
-Tabs.Settings:AddToggle("DebugMode", {
-    Title = "Debug Mode",
-    Description = "Bật/tắt chế độ ghi log chi tiết (Debug Mode) để kiểm tra hoạt động script.",
-    Default = appConfig.debugMode == true
+Tabs.Settings:AddToggle("HideAllModels", {
+    Title = "Xóa/Ẩn Toàn Bộ Model (Players, Units, Enemies)",
+    Description = "Ẩn model nhân vật của bạn, người chơi khác, unit đặt ra và quái vật để tối ưu FPS tối đa",
+    Default = appConfig.hideAllModels == true
 }):OnChanged(function(v)
-    appConfig.debugMode = v
-    getgenv().AnimeExpeditionsDebugMode = v
+    appConfig.hideAllModels = v
+    if v and type(getgenv().AnimeExpeditionsApplyHideAllModels) == "function" then
+        getgenv().AnimeExpeditionsApplyHideAllModels(true)
+    end
     saveConfig()
 end)
-Tabs.Settings:AddToggle("AutoVoteStartExpedition", {
-    Title = "Auto Vote Start (Chỉ Expedition)",
-    Description = "Vào Expedition sẽ tạm bật; khi rời sẽ khôi phục trạng thái Auto Vote Start trước đó.",
-    Default = appConfig.expeditionAutoVoteStart,
-}):OnChanged(function(value)
-    appConfig.expeditionAutoVoteStart = value
-    saveConfig()
-end)
-Tabs.Settings:AddSection("Auto Leave")
+
+Tabs.Settings:AddSection("Tự Động Thoát / Rời Trận")
 getgenv().AnimeExpeditionsLeaveToggles.MatchTimer = Tabs.Settings:AddToggle("AutoLeaveAfterMinutes", {
     Title = "Tự động thoát sau X phút",
     Description = "Yêu cầu bật Auto Join Map. Tính theo thời gian trận hiện tại.",
@@ -4158,24 +4474,25 @@ Tabs.Settings:AddInput("AutoLeaveAfterMinutesValue", {
         saveConfig()
     end,
 })
-local function applyFPSCap(value)
-    local cap = math.clamp(math.floor(tonumber(value) or 60), 1, 360)
-    appConfig.fpsCap = cap
-    if type(setfpscap) == "function" then pcall(setfpscap, cap) end
-    return cap
-end
-applyFPSCap(appConfig.fpsCap)
-Tabs.Settings:AddInput("FPSCap", {
-    Title = "Giới hạn FPS",
-    Default = tostring(appConfig.fpsCap),
-    Placeholder = "60",
-    Numeric = true,
-    Finished = true,
-    Callback = function(value)
-        applyFPSCap(value)
-        saveConfig()
-    end,
-})
+
+Tabs.Settings:AddSection("Hệ Thống & Khác")
+Tabs.Settings:AddToggle("DebugMode", {
+    Title = "Debug Mode",
+    Description = "Bật/tắt chế độ ghi log chi tiết (Debug Mode) để kiểm tra hoạt động script.",
+    Default = appConfig.debugMode == true
+}):OnChanged(function(v)
+    appConfig.debugMode = v
+    getgenv().AnimeExpeditionsDebugMode = v
+    saveConfig()
+end)
+Tabs.Settings:AddToggle("AutoVoteStartExpedition", {
+    Title = "Auto Vote Start (Chỉ Expedition)",
+    Description = "Vào Expedition sẽ tạm bật; khi rời sẽ khôi phục trạng thái Auto Vote Start trước đó.",
+    Default = appConfig.expeditionAutoVoteStart,
+}):OnChanged(function(value)
+    appConfig.expeditionAutoVoteStart = value
+    saveConfig()
+end)
 local fixLagState = {
     lighting = nil,
     particles = {},
@@ -4201,31 +4518,107 @@ local function disableBlurEffects()
     end)
 end
 
+local function hideModelVisuals(model)
+    if not model then return end
+    for _, v in ipairs(model:GetDescendants()) do
+        if v:IsA("BasePart") then
+            v.Transparency = 1
+            v.CastShadow = false
+        elseif v:IsA("Decal") or v:IsA("Texture") then
+            v.Transparency = 1
+        elseif v:IsA("ParticleEmitter") or v:IsA("Beam") or v:IsA("Trail") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Highlight") then
+            v.Enabled = false
+        elseif v:IsA("Accessory") or v:IsA("Clothing") or v:IsA("CharacterMesh") then
+            if v and typeof(v) == "Instance" then pcall(function() v:Destroy() end) end
+        elseif v.Name == "COSMETIC_VFX" or v.Name == "COSMETIC_MODEL" or v.Name == "Animations" then
+            if v and typeof(v) == "Instance" then pcall(function() v:Destroy() end) end
+        end
+    end
+end
+
+local function applyHideAllModels(enabled)
+    if not enabled then return end
+    local targetFolderNames = {"Players", "Units", "Enemies", "UnitFollowers", "Summons", "NPCS"}
+    for _, folderName in ipairs(targetFolderNames) do
+        local f = workspace:FindFirstChild(folderName)
+        if f then
+            for _, m in ipairs(f:GetChildren()) do
+                hideModelVisuals(m)
+            end
+        end
+    end
+    if LocalPlayer.Character then
+        hideModelVisuals(LocalPlayer.Character)
+    end
+end
+getgenv().AnimeExpeditionsApplyHideAllModels = applyHideAllModels
+
+local function setupModelHidingListeners()
+    local targetFolderNames = {"Players", "Units", "Enemies", "UnitFollowers", "Summons", "NPCS"}
+    for _, folderName in ipairs(targetFolderNames) do
+        local folder = workspace:FindFirstChild(folderName)
+        if folder then
+            folder.ChildAdded:Connect(function(child)
+                if appConfig.hideAllModels then
+                    task.defer(function()
+                        hideModelVisuals(child)
+                    end)
+                end
+            end)
+        end
+    end
+    LocalPlayer.CharacterAdded:Connect(function(char)
+        if appConfig.hideAllModels then
+            task.defer(function()
+                hideModelVisuals(char)
+            end)
+        end
+    end)
+end
+pcall(setupModelHidingListeners)
+
 local function SetFixLagEnabled(enabled)
     local lighting = game:GetService("Lighting")
     local terrain = workspace:FindFirstChildOfClass("Terrain")
     disableBlurEffects()
 
-    if enabled then
-        -- 1. Tắt toàn bộ VFX skill/aura trong game settings
-        for _, settingName in ipairs({"OwnUnitVFXEnabled", "AbilityVFXEnabled", "UnitAuraEnabled", "TraitAuraEnabled", "BuffIndicatorsEnabled", "DamageIndicatorsEnabled"}) do
-            local ok, value = pcall(Actions.GetSettingValue, settingName)
-            if ok and value == true then pcall(Actions.ChangeSetting, settingName, false) end
-        end
+    -- 1. Game Client Settings: Tắt toàn bộ VFX, auras, shake, camera effects ở mức Game Engine
+    local inGameLagSettings = {
+        LowDetailMode = true,
+        OwnUnitVFXEnabled = false,
+        OtherUnitVFXEnabled = false,
+        AbilityVFXEnabled = false,
+        UnitAuraEnabled = false,
+        TraitAuraEnabled = false,
+        BuffIndicatorsEnabled = false,
+        DamageIndicatorsEnabled = false,
+        DisplayEnemyEffects = false,
+        DisplayEnemyStatusEffects = false,
+        OtherCosmeticEnabled = false,
+        CameraShakeEnabled = false,
+        DepthOfFieldEnabled = false,
+        DisplayStageCutscenes = false,
+    }
+    for settingName, targetVal in pairs(inGameLagSettings) do
+        pcall(function() Actions.ChangeSetting(settingName, enabled and targetVal or true) end)
+    end
 
-        -- 2. Tắt Shadows & Fog trong Lighting
-        if not fixLagState.lighting then
-            fixLagState.lighting = {
-                GlobalShadows = lighting.GlobalShadows,
-                FogEnd = lighting.FogEnd,
-            }
-        end
+    -- 2. Tắt Shadows & Post-processing trong Lighting
+    if not fixLagState.lighting then
+        fixLagState.lighting = {
+            GlobalShadows = lighting.GlobalShadows,
+            FogEnd = lighting.FogEnd,
+        }
+    end
+
+    if enabled then
         lighting.GlobalShadows = false
         lighting.FogEnd = 9e9
 
-        -- 3. Triệt tiêu Terrain
+        -- 3. Tối ưu Terrain
         if terrain then
             pcall(function()
+                terrain.Decoration = false
                 terrain.WaterWaveSize = 0
                 terrain.WaterWaveSpeed = 0
                 terrain.WaterReflectance = 0
@@ -4233,29 +4626,39 @@ local function SetFixLagEnabled(enabled)
             end)
         end
 
-        -- 4. Giảm tải tối đa Render (Mesh/Texture/Decal/Sound/Shadow) nhưng GIỮ NGUYÊN BasePart CFrame, Size, CanCollide, CanTouch để Placement & Raycast hoạt động 100%
+        -- 4. Chế độ Ultra Potato: SmoothPlastic, triệt tiêu Decals/Textures/Particles/Lights/Shadows nhưng giữ 100% CFrame, Size, Collision cho Placement/Gameplay
         for _, v in ipairs(workspace:GetDescendants()) do
-            if v:IsA("ParticleEmitter") or v:IsA("Beam") or v:IsA("Trail") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") then
+            if v:IsA("ParticleEmitter") or v:IsA("Beam") or v:IsA("Trail") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Highlight") then
                 if fixLagState.particles[v] == nil then fixLagState.particles[v] = v.Enabled end
                 v.Enabled = false
             elseif v:IsA("Decal") or v:IsA("Texture") then
                 if fixLagState.decals[v] == nil then fixLagState.decals[v] = v.Transparency end
                 v.Transparency = 1
             elseif v:IsA("SurfaceAppearance") then
-                pcall(function() v:Destroy() end)
+                if v and typeof(v) == "Instance" then pcall(function() v:Destroy() end) end
             elseif v:IsA("BasePart") then
                 if fixLagState.parts[v] == nil then
                     fixLagState.parts[v] = {
                         Material = v.Material,
-                        Color = v.Color,
+                        Reflectance = v.Reflectance,
                         CastShadow = v.CastShadow
                     }
                 end
                 v.Material = Enum.Material.SmoothPlastic
-                v.Color = Color3.fromRGB(100, 100, 100)
+                v.Reflectance = 0
                 v.CastShadow = false
+            elseif v:IsA("Light") then
+                v.Shadows = false
+                v.Enabled = false
             end
         end
+
+        -- 5. Tối ưu Quality Level nếu engine hỗ trợ
+        pcall(function()
+            if settings and settings().Rendering then
+                settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+            end
+        end)
         return
     end
 
@@ -4263,6 +4666,14 @@ local function SetFixLagEnabled(enabled)
     if fixLagState.lighting then
         lighting.GlobalShadows = fixLagState.lighting.GlobalShadows
         lighting.FogEnd = fixLagState.lighting.FogEnd
+    end
+    if terrain then
+        pcall(function()
+            terrain.Decoration = true
+            terrain.WaterWaveSize = 0.15
+            terrain.WaterWaveSpeed = 10
+            terrain.WaterReflectance = 0.2
+        end)
     end
     for obj, wasEnabled in pairs(fixLagState.particles) do
         if obj and obj.Parent then obj.Enabled = wasEnabled end
@@ -4273,27 +4684,39 @@ local function SetFixLagEnabled(enabled)
     for obj, st in pairs(fixLagState.parts) do
         if obj and obj.Parent then
             obj.Material = st.Material
-            obj.Color = st.Color
+            obj.Reflectance = st.Reflectance or 0
             obj.CastShadow = st.CastShadow
         end
     end
+    pcall(function()
+        if settings and settings().Rendering then
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic
+        end
+    end)
 end
 
 local lastWorkspaceScan = 0
 task.spawn(function()
     while expeditionScriptIsCurrent() do
         disableBlurEffects()
+        if appConfig.hideAllModels then
+            pcall(function() applyHideAllModels(true) end)
+        end
         if appConfig.fixLagEnabled and tick() - lastWorkspaceScan >= 15 then
             lastWorkspaceScan = tick()
             pcall(function()
                 for _, v in ipairs(workspace:GetDescendants()) do
-                    if v:IsA("ParticleEmitter") or v:IsA("Beam") or v:IsA("Trail") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") then
+                    if v:IsA("ParticleEmitter") or v:IsA("Beam") or v:IsA("Trail") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Highlight") then
                         v.Enabled = false
                     elseif v:IsA("Decal") or v:IsA("Texture") then
                         v.Transparency = 1
                     elseif v:IsA("BasePart") then
                         if v.Material ~= Enum.Material.SmoothPlastic then v.Material = Enum.Material.SmoothPlastic end
+                        if v.Reflectance ~= 0 then v.Reflectance = 0 end
                         if v.CastShadow then v.CastShadow = false end
+                    elseif v:IsA("Light") then
+                        if v.Shadows then v.Shadows = false end
+                        if v.Enabled then v.Enabled = false end
                     end
                 end
             end)
@@ -4304,14 +4727,29 @@ end)
 
 pcall(function()
     workspace.DescendantAdded:Connect(function(v)
+        if appConfig.hideAllModels then
+            local p = v.Parent
+            if p and (p.Name == "Players" or p.Name == "Units" or p.Name == "Enemies" or p.Name == "UnitFollowers" or p.Name == "Summons" or p.Name == "NPCS" or (p.Parent and (p.Parent.Name == "Players" or p.Parent.Name == "Units" or p.Parent.Name == "Enemies" or p.Parent.Name == "UnitFollowers" or p.Parent.Name == "Summons" or p.Parent.Name == "NPCS"))) then
+                if v:IsA("BasePart") or v:IsA("Decal") or v:IsA("Texture") then
+                    v.Transparency = 1
+                    if v:IsA("BasePart") then v.CastShadow = false end
+                elseif v:IsA("ParticleEmitter") or v:IsA("Beam") or v:IsA("Trail") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Highlight") then
+                    v.Enabled = false
+                end
+            end
+        end
         if appConfig.fixLagEnabled then
-            if v:IsA("ParticleEmitter") or v:IsA("Beam") or v:IsA("Trail") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") then
+            if v:IsA("ParticleEmitter") or v:IsA("Beam") or v:IsA("Trail") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Highlight") then
                 v.Enabled = false
             elseif v:IsA("Decal") or v:IsA("Texture") then
                 v.Transparency = 1
             elseif v:IsA("BasePart") then
                 v.Material = Enum.Material.SmoothPlastic
+                v.Reflectance = 0
                 v.CastShadow = false
+            elseif v:IsA("Light") then
+                v.Shadows = false
+                v.Enabled = false
             end
         end
     end)
@@ -4405,11 +4843,15 @@ local blackScreenGui = Instance.new("ScreenGui")
 blackScreenGui.Name = "BlackScreenGUI"
 blackScreenGui.ResetOnSpawn = false
 blackScreenGui.IgnoreGuiInset = true
-blackScreenGui.DisplayOrder = -10
+blackScreenGui.DisplayOrder = 999999
+blackScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 local blackFrame = Instance.new("Frame", blackScreenGui)
-blackFrame.Size = UDim2.new(1, 0, 1, 0)
+blackFrame.Size = UDim2.fromScale(1, 1)
+blackFrame.Position = UDim2.fromScale(0, 0)
 blackFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+blackFrame.BackgroundTransparency = 0
 blackFrame.BorderSizePixel = 0
+blackFrame.ZIndex = 100
 blackFrame.Visible = false
 local blackPanel = Instance.new("Frame", blackFrame)
 blackPanel.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -4991,6 +5433,15 @@ if not safeParentScreenGui(blackScreenGui) then
     return
 end
 local lastBlackScreenInputAt = tick()
+blackFrame:GetPropertyChangedSignal("Visible"):Connect(function()
+    if blackFrame.Visible then
+        getgenv().AnimeExpeditionsAFKScreenActive = true
+        if type(setfpscap) == "function" then pcall(setfpscap, 15) end
+    else
+        getgenv().AnimeExpeditionsAFKScreenActive = false
+        if type(setfpscap) == "function" then pcall(setfpscap, appConfig.fpsCap or 60) end
+    end
+end)
 blackScreenCloseBtn.Activated:Connect(function()
     lastBlackScreenInputAt = tick()
     blackFrame.Visible = false
