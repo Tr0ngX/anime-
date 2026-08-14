@@ -58,15 +58,17 @@ do
         local oldNamecall
         oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
             local method = getnamecallmethod()
-            if self == ScriptContext.Error and (method == "Connect" or method == "Once")
-                and (typeof(checkcaller) ~= "function" or not checkcaller()) then
-                earlyState.errorConnectionBlocks += 1
-                return oldNamecall(self, function() end)
+            if method ~= "Kick" and method ~= "Connect" and method ~= "Once" then
+                return oldNamecall(self, ...)
             end
             if self == LocalPlayer and method == "Kick" then
                 earlyState.kickAttempts += 1
                 earlyState.kickBlocks += 1
                 return nil
+            end
+            if self == ScriptContext.Error and (typeof(checkcaller) ~= "function" or not checkcaller()) then
+                earlyState.errorConnectionBlocks += 1
+                return oldNamecall(self, function() end)
             end
             return oldNamecall(self, ...)
         end))
@@ -75,7 +77,8 @@ do
     if not earlyState.hookedIndexKick and typeof(hookmetamethod) == "function" and typeof(newcclosure) == "function" then
         local oldIndex
         oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
-            if self == LocalPlayer and key == "Kick" then
+            if key ~= "Kick" then return oldIndex(self, key) end
+            if self == LocalPlayer then
                 return function(player, ...)
                     if player == LocalPlayer then
                         earlyState.kickAttempts += 1
@@ -247,18 +250,18 @@ local function connectDiagnostic()
         local suspicious = isSuspiciousSource(source)
         if suspicious then
             state.suspiciousCount += 1
-        end
-        if suspicious then
-            log(("suspicious ScriptContext.Error #%d uptime=%.1fs source=%s"):format(
-                state.suspiciousCount,
-                os.clock() - startedAt,
-                describeSource(source)
-            ))
-            log("message: " .. tostring(message))
-            if stackTrace and stackTrace ~= "" then
-                log("stack: " .. tostring(stackTrace))
+            if getgenv().AnimeExpeditionsDebugMode then
+                log(("suspicious ScriptContext.Error #%d uptime=%.1fs source=%s"):format(
+                    state.suspiciousCount,
+                    os.clock() - startedAt,
+                    describeSource(source)
+                ))
+                log("message: " .. tostring(message))
+                if stackTrace and stackTrace ~= "" then
+                    log("stack: " .. tostring(stackTrace))
+                end
+                log("matched suspicious pattern: source missing or parentless; delayed Connection Lost kick may be scheduled")
             end
-            log("matched suspicious pattern: source missing or parentless; delayed Connection Lost kick may be scheduled")
         end
     end)
 end
@@ -302,19 +305,19 @@ task.spawn(function()
         local oldNamecall
         oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
             local method = getnamecallmethod()
-            if self == ScriptContext.Error and (method == "Connect" or method == "Once") and not checkcaller() then
-                state.errorConnectionBlocks += 1
-                log(("blocked ScriptContext.Error:%s listener, blocked=%d"):format(method, state.errorConnectionBlocks))
-                return oldNamecall(self, function() end)
+            if method ~= "Kick" and method ~= "Connect" and method ~= "Once" then
+                return oldNamecall(self, ...)
             end
             if self == LocalPlayer and method == "Kick" then
                 state.kickAttempts += 1
                 if not checkcaller() and isBlockedKick(self) then
                     state.kickBlocks += 1
-                    local args = {...}
-                    log(("blocked LocalPlayer:Kick(%q), blocked=%d"):format(tostring(args[1]), state.kickBlocks))
                     return nil
                 end
+            end
+            if self == ScriptContext.Error and (method == "Connect" or method == "Once") and not checkcaller() then
+                state.errorConnectionBlocks += 1
+                return oldNamecall(self, function() end)
             end
             return oldNamecall(self, ...)
         end))
@@ -322,18 +325,18 @@ task.spawn(function()
         log("installed __namecall Kick hook")
     end
 
-    task.wait(0.05) -- Hoãn 50ms cài đặt hook phụ tiếp theo
+    task.wait(0.05)
 
     -- Step 2: Lazy Load __index hook
     if not state.hookedIndexKick and typeof(hookmetamethod) == "function" and typeof(newcclosure) == "function" then
         local oldIndex
         oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
-            if self == LocalPlayer and key == "Kick" then
+            if key ~= "Kick" then return oldIndex(self, key) end
+            if self == LocalPlayer then
                 return function(player, reason, ...)
                     state.kickAttempts += 1
                     if isBlockedKick(player) then
                         state.kickBlocks += 1
-                        log(("blocked LocalPlayer.Kick(LocalPlayer, %q), blocked=%d"):format(tostring(reason), state.kickBlocks))
                         return nil
                     end
                     return oldIndex(self, key)(player, reason, ...)
@@ -438,8 +441,8 @@ do
         and type(hookmetamethod) == "function" and type(newcclosure) == "function" then
         local oldIndex
         oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
-            if self == inputService and key == "PreferredInput"
-                and (type(checkcaller) ~= "function" or not checkcaller()) then
+            if key ~= "PreferredInput" then return oldIndex(self, key) end
+            if self == inputService and (type(checkcaller) ~= "function" or not checkcaller()) then
                 return Enum.PreferredInput.Touch
             end
             return oldIndex(self, key)
@@ -2013,17 +2016,138 @@ do
             return originalNotify(self, localizeOptions(options), ...)
         end
     end
+    local GuiService = game:GetService("GuiService")
+    local Workspace = game:GetService("Workspace")
+    local UserInputService = game:GetService("UserInputService")
+
+    local function getScreenSafeBounds()
+        local camera = Workspace.CurrentCamera
+        local viewport = (camera and camera.ViewportSize) or Vector2.new(1280, 720)
+        if viewport.X < 320 or viewport.Y < 240 then
+            viewport = Vector2.new(1280, 720)
+        end
+        local topInset = 36
+        local bottomInset = 0
+        pcall(function()
+            local tl, br = GuiService:GetGuiInset()
+            if tl and tl.Y > 0 then topInset = math.max(topInset, tl.Y) end
+            if br and br.Y > 0 then bottomInset = math.max(bottomInset, br.Y) end
+        end)
+        local minX = 6
+        local minY = math.max(topInset + 4, 40)
+        local maxX = math.max(minX + 40, viewport.X - 6)
+        local maxY = math.max(minY + 40, viewport.Y - bottomInset - 6)
+        return viewport, minX, minY, maxX, maxY
+    end
+
+    local function clampWindowToScreen(window)
+        if type(window) ~= "table" or not window.Root then return false end
+        local ok, res = pcall(function()
+            local root = window.Root
+            local viewport, minX, minY, maxX, maxY = getScreenSafeBounds()
+            local absSize = root.AbsoluteSize
+            local winW = (absSize.X >= 100 and absSize.X) or (window.Size and window.Size.X.Offset) or 580
+            local winH = (absSize.Y >= 100 and absSize.Y) or (window.Size and window.Size.Y.Offset) or 460
+            if winW > viewport.X - 12 then winW = math.max(300, viewport.X - 12) end
+            if winH > viewport.Y - minY - 12 then winH = math.max(240, viewport.Y - minY - 12) end
+
+            local curPos = root.Position
+            local curX = curPos.X.Offset
+            local curY = curPos.Y.Offset
+
+            local maxAllowedX = math.max(minX, maxX - winW)
+            local maxAllowedY = math.max(minY, maxY - winH)
+
+            local isTotallyOff = (curX + winW < 50) or (curY + winH < 50) or (curX > viewport.X - 40) or (curY > viewport.Y - 20)
+            local targetX, targetY
+            if isTotallyOff then
+                targetX = math.floor(math.max(minX, (viewport.X - winW) / 2))
+                targetY = math.floor(math.max(minY, (viewport.Y - winH) / 2))
+            else
+                targetX = math.clamp(curX, minX, maxAllowedX)
+                targetY = math.clamp(curY, minY, maxAllowedY)
+            end
+
+            if curX ~= targetX or curY ~= targetY or curPos.X.Scale ~= 0 or curPos.Y.Scale ~= 0 then
+                local newPos = UDim2.fromOffset(targetX, targetY)
+                window.Position = newPos
+                root.Position = newPos
+                return true
+            end
+            return false
+        end)
+        return ok and res
+    end
+
     local originalCreateWindow = Fluent.CreateWindow
     if type(originalCreateWindow) == "function" then
         Fluent.CreateWindow = function(self, options, ...)
             local results = table.pack(originalCreateWindow(self, localizeOptions(options), ...))
             local window = results[1]
-            if type(window) == "table" and type(window.AddTab) == "function" then
-                local originalAddTab = window.AddTab
-                window.AddTab = function(windowSelf, tabOptions, ...)
-                    local tabResults = table.pack(originalAddTab(windowSelf, localizeOptions(tabOptions), ...))
-                    tabResults[1] = wrapTab(tabResults[1])
-                    return table.unpack(tabResults, 1, tabResults.n)
+            if type(window) == "table" then
+                if type(window.AddTab) == "function" then
+                    local originalAddTab = window.AddTab
+                    window.AddTab = function(windowSelf, tabOptions, ...)
+                        local tabResults = table.pack(originalAddTab(windowSelf, localizeOptions(tabOptions), ...))
+                        tabResults[1] = wrapTab(tabResults[1])
+                        return table.unpack(tabResults, 1, tabResults.n)
+                    end
+                end
+
+                if window.Root then
+                    clampWindowToScreen(window)
+
+                    local cam = Workspace.CurrentCamera
+                    if cam then
+                        cam:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+                            task.defer(function()
+                                clampWindowToScreen(window)
+                            end)
+                        end)
+                    end
+
+                    local isClamping = false
+                    window.Root:GetPropertyChangedSignal("Position"):Connect(function()
+                        if isClamping then return end
+                        local pos = window.Root.Position
+                        local _, minX, minY, maxX, maxY = getScreenSafeBounds()
+                        local absSize = window.Root.AbsoluteSize
+                        local winW = (absSize.X >= 100 and absSize.X) or (window.Size and window.Size.X.Offset) or 580
+                        local winH = (absSize.Y >= 100 and absSize.Y) or (window.Size and window.Size.Y.Offset) or 460
+                        local maxAllowedX = math.max(minX, maxX - winW)
+                        local maxAllowedY = math.max(minY, maxY - winH)
+                        if pos.X.Offset < minX or pos.Y.Offset < minY or pos.X.Offset > maxAllowedX or pos.Y.Offset > maxAllowedY or pos.X.Scale ~= 0 or pos.Y.Scale ~= 0 then
+                            isClamping = true
+                            task.defer(function()
+                                clampWindowToScreen(window)
+                                isClamping = false
+                            end)
+                        end
+                    end)
+
+                    window.Root:GetPropertyChangedSignal("Visible"):Connect(function()
+                        if window.Root.Visible then
+                            task.defer(function()
+                                clampWindowToScreen(window)
+                            end)
+                        end
+                    end)
+
+                    UserInputService.InputEnded:Connect(function(input)
+                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                            task.defer(function()
+                                clampWindowToScreen(window)
+                            end)
+                        end
+                    end)
+
+                    task.spawn(function()
+                        for _, delaySeconds in ipairs({0.05, 0.1, 0.25, 0.5, 1.0, 2.0}) do
+                            task.wait(delaySeconds)
+                            if not window or not window.Root or not window.Root.Parent then break end
+                            clampWindowToScreen(window)
+                        end
+                    end)
                 end
             end
             return table.unpack(results, 1, results.n)
@@ -2127,7 +2251,7 @@ local Window = Fluent:CreateWindow({
     SubTitle = "by Tr0ngX",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
-    Acrylic = true,
+    Acrylic = false,
     Theme = "Dark",
     MinimizeKey = Enum.KeyCode.LeftShift
 })
@@ -10145,17 +10269,20 @@ installMacroHook = function()
     local oldNamecall
     local getCFrameComponents = CFrame.new().GetComponents
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-    local method = getnamecallmethod()
-    local args = {...}
-    if not checkcaller() then
+        local method = getnamecallmethod()
+        if method ~= "FireServer" and method ~= "InvokeServer" then
+            return oldNamecall(self, ...)
+        end
+        if typeof(checkcaller) == "function" and checkcaller() then
+            return oldNamecall(self, ...)
+        end
+        local args = {...}
         if isRecording then
-            if method == "FireServer" or method == "InvokeServer" then
-                local actStr = "UNKNOWN"
-                if typeof(args[1]) == "string" then actStr = args[1]
-                elseif typeof(args[2]) == "string" then actStr = args[2] end
-                if not (actStr:find("Mouse") or actStr:find("Move") or actStr:find("Camera")) then
-                    print("[AE-LOG GLOBAL DEBUG] Remote: " .. tostring(self.Name) .. " | Method: " .. tostring(method) .. " | Args: " .. tostring(args[1]) .. ", " .. tostring(args[2]))
-                end
+            local actStr = "UNKNOWN"
+            if typeof(args[1]) == "string" then actStr = args[1]
+            elseif typeof(args[2]) == "string" then actStr = args[2] end
+            if not (actStr:find("Mouse") or actStr:find("Move") or actStr:find("Camera")) then
+                print("[AE-LOG GLOBAL DEBUG] Remote: " .. tostring(self.Name) .. " | Method: " .. tostring(method) .. " | Args: " .. tostring(args[1]) .. ", " .. tostring(args[2]))
             end
         end
 
@@ -10170,102 +10297,99 @@ installMacroHook = function()
                 end
             end
 
-        local helperCapture = getgenv().ExpeditionAutoHelperCapture
-        local helperCaptureHandled = false
-        if helperCapture and args[2] == "PlaceGameUnit" then
-            local position
-            for index = 3, #args do
-                if typeof(args[index]) == "CFrame" then
-                    position = {getCFrameComponents(args[index])}
-                    break
-                end
-            end
-            if position then
-                getgenv().ExpeditionAutoCapturedPosition = {priority = helperCapture.priority, position = position}
-                getgenv().ExpeditionAutoHelperCapture = nil
-                helperCaptureHandled = true
-            end
-        end
-        if helperCaptureHandled then return nil end
-
-        if isRecording then
-            local action = args[2]
-            if type(action) == "string" and not (action:find("Mouse") or action:find("Move") or action:find("Camera")) then
-                print("[AE-LOG DEBUG] Recorded FireServer: " .. tostring(action) .. " | Arg1: " .. tostring(args[1]))
-            end
-            local currentTime = tick() - startTime
-            local mList = appConfig.Macros[currentStageKey]
-            if action == "SelectSlot" then
-                local curWave = lastStateInfo and lastStateInfo.Wave or 0
-                table.insert(mList, {time = currentTime, type = "Select", slot = args[3], wave = curWave})
-            elseif action == "PlaceGameUnit" or action == "PlaceGamePhantom" then
-                local pArg
-                for i = 3, #args do
-                    if typeof(args[i]) == "CFrame" or typeof(args[i]) == "Vector3" then pArg = args[i]; break end
-                end
-                if pArg then
-                    local p = typeof(pArg) == "CFrame" and {getCFrameComponents(pArg)} or {pArg.X, pArg.Y, pArg.Z}
-                    local curWave = lastStateInfo and lastStateInfo.Wave or 0
-                    table.insert(mList, {time = currentTime, type = "Place", slot = args[3], pos = p, wave = curWave})
-                end
-            elseif action == "VoteStart" or (action == "Response" and args[3] == true and (function()
-                pcall(function()
-                    local ReplicaClient = require(game:GetService("ReplicatedStorage").Shared.ReplicaClient)
-                    local voteReplica = ReplicaClient.GetOne("VotePrompt")
-                    if voteReplica and tostring(voteReplica.Id) == tostring(args[1]) then return true end
-                end)
-                return false
-            end)()) then
-                local curWave = lastStateInfo and lastStateInfo.Wave or 0
-                table.insert(mList, {time = currentTime, type = "VoteStart", wave = curWave})
-                print("[Macro Record] Đã lưu hành động bấm VoteStart lúc: " .. tostring(currentTime))
-            elseif action == "UpgradeGameUnit" or action == "SellGameUnit" or action == "ChangeGameUnitAutoUpgradePriority"
-                or action == "DisableGameUnitAutoUpgrade" or action == "ChangeGameUnitPriority" then
-                local p
-                local targetAsset
-                local gameUnits = Fusion.peek(Dependencies.GameUnits)
-                if type(gameUnits) == "table" then
-                    for model, unitState in pairs(gameUnits) do
-                        local unitData = Fusion.peek(unitState)
-                        if typeof(model) == "Instance" and type(unitData) == "table"
-                            and Fusion.peek(unitData.Owner) == LocalPlayer
-                            and tostring(Fusion.peek(unitData.ID)) == tostring(args[3]) then
-                            local unitCFrame = Fusion.peek(unitData.CFrame)
-                            local unitPosition = typeof(unitCFrame) == "CFrame" and unitCFrame.Position
-                                or (model:IsA("Model") and model:GetPivot().Position or nil)
-                            if unitPosition then
-                                p = {unitPosition.X, unitPosition.Y, unitPosition.Z}
-                                targetAsset = model.Name
-                            end
-                            break
-                        end
+            local helperCapture = getgenv().ExpeditionAutoHelperCapture
+            local helperCaptureHandled = false
+            if helperCapture and args[2] == "PlaceGameUnit" then
+                local position
+                for index = 3, #args do
+                    if typeof(args[index]) == "CFrame" then
+                        position = {getCFrameComponents(args[index])}
+                        break
                     end
                 end
-                if not p then
-                    warn("[AE-LOG] Macro Record WARNING: GameUnits ID not found: " .. tostring(args[3]))
+                if position then
+                    getgenv().ExpeditionAutoCapturedPosition = {priority = helperCapture.priority, position = position}
+                    getgenv().ExpeditionAutoHelperCapture = nil
+                    helperCaptureHandled = true
                 end
-                if action == "UpgradeGameUnit" then
+            end
+            if helperCaptureHandled then return nil end
+
+            if isRecording then
+                local action = args[2]
+                if type(action) == "string" and not (action:find("Mouse") or action:find("Move") or action:find("Camera")) then
+                    print("[AE-LOG DEBUG] Recorded FireServer: " .. tostring(action) .. " | Arg1: " .. tostring(args[1]))
+                end
+                local currentTime = tick() - startTime
+                local mList = appConfig.Macros[currentStageKey]
+                if action == "SelectSlot" then
                     local curWave = lastStateInfo and lastStateInfo.Wave or 0
-                    table.insert(mList, {time = currentTime, type = "Upgrade", unitId = args[3], asset = targetAsset, pos = p, wave = curWave})
-                elseif action == "SellGameUnit" then
+                    table.insert(mList, {time = currentTime, type = "Select", slot = args[3], wave = curWave})
+                elseif action == "PlaceGameUnit" or action == "PlaceGamePhantom" then
+                    local pArg
+                    for i = 3, #args do
+                        if typeof(args[i]) == "CFrame" or typeof(args[i]) == "Vector3" then pArg = args[i]; break end
+                    end
+                    if pArg then
+                        local p = typeof(pArg) == "CFrame" and {getCFrameComponents(pArg)} or {pArg.X, pArg.Y, pArg.Z}
+                        local curWave = lastStateInfo and lastStateInfo.Wave or 0
+                        table.insert(mList, {time = currentTime, type = "Place", slot = args[3], pos = p, wave = curWave})
+                    end
+                elseif action == "VoteStart" or (action == "Response" and args[3] == true and (function()
+                    pcall(function()
+                        local ReplicaClient = require(game:GetService("ReplicatedStorage").Shared.ReplicaClient)
+                        local voteReplica = ReplicaClient.GetOne("VotePrompt")
+                        if voteReplica and tostring(voteReplica.Id) == tostring(args[1]) then return true end
+                    end)
+                    return false
+                end)()) then
                     local curWave = lastStateInfo and lastStateInfo.Wave or 0
-                    table.insert(mList, {time = currentTime, type = "Sell", unitId = args[3], asset = targetAsset, pos = p, wave = curWave})
-                elseif action == "ChangeGameUnitAutoUpgradePriority" then
-                    local curWave = lastStateInfo and lastStateInfo.Wave or 0
-                    table.insert(mList, {time = currentTime, type = "AutoUpgrade", enabled = true, priority = args[4], unitId = args[3], asset = targetAsset, pos = p, wave = curWave})
-                elseif action == "DisableGameUnitAutoUpgrade" then
-                    local curWave = lastStateInfo and lastStateInfo.Wave or 0
-                    table.insert(mList, {time = currentTime, type = "AutoUpgrade", enabled = false, unitId = args[3], asset = targetAsset, pos = p, wave = curWave})
-                elseif action == "ChangeGameUnitPriority" then
-                    local curWave = lastStateInfo and lastStateInfo.Wave or 0
-                    table.insert(mList, {time = currentTime, type = "Priority", priority = args[4], unitId = args[3], asset = targetAsset, pos = p, wave = curWave})
+                    table.insert(mList, {time = currentTime, type = "VoteStart", wave = curWave})
+                    print("[Macro Record] Đã lưu hành động bấm VoteStart lúc: " .. tostring(currentTime))
+                elseif action == "UpgradeGameUnit" or action == "SellGameUnit" or action == "ChangeGameUnitAutoUpgradePriority"
+                    or action == "DisableGameUnitAutoUpgrade" or action == "ChangeGameUnitPriority" then
+                    local p
+                    local targetAsset
+                    local gameUnits = Fusion.peek(Dependencies.GameUnits)
+                    if type(gameUnits) == "table" then
+                        for model, unitState in pairs(gameUnits) do
+                            local unitData = Fusion.peek(unitState)
+                            if typeof(model) == "Instance" and type(unitData) == "table"
+                                and Fusion.peek(unitData.Owner) == LocalPlayer
+                                and tostring(Fusion.peek(unitData.ID)) == tostring(args[3]) then
+                                local unitCFrame = Fusion.peek(unitData.CFrame)
+                                local unitPosition = typeof(unitCFrame) == "CFrame" and unitCFrame.Position
+                                    or (model:IsA("Model") and model:GetPivot().Position or nil)
+                                if unitPosition then
+                                    p = {unitPosition.X, unitPosition.Y, unitPosition.Z}
+                                    targetAsset = model.Name
+                                end
+                                break
+                            end
+                        end
+                    end
+                    if not p then
+                        warn("[AE-LOG] Macro Record WARNING: GameUnits ID not found: " .. tostring(args[3]))
+                    end
+                    if action == "UpgradeGameUnit" then
+                        local curWave = lastStateInfo and lastStateInfo.Wave or 0
+                        table.insert(mList, {time = currentTime, type = "Upgrade", unitId = args[3], asset = targetAsset, pos = p, wave = curWave})
+                    elseif action == "SellGameUnit" then
+                        local curWave = lastStateInfo and lastStateInfo.Wave or 0
+                        table.insert(mList, {time = currentTime, type = "Sell", unitId = args[3], asset = targetAsset, pos = p, wave = curWave})
+                    elseif action == "ChangeGameUnitAutoUpgradePriority" then
+                        local curWave = lastStateInfo and lastStateInfo.Wave or 0
+                        table.insert(mList, {time = currentTime, type = "AutoUpgrade", enabled = true, priority = args[4], unitId = args[3], asset = targetAsset, pos = p, wave = curWave})
+                    elseif action == "DisableGameUnitAutoUpgrade" then
+                        local curWave = lastStateInfo and lastStateInfo.Wave or 0
+                        table.insert(mList, {time = currentTime, type = "AutoUpgrade", enabled = false, unitId = args[3], asset = targetAsset, pos = p, wave = curWave})
+                    elseif action == "ChangeGameUnitPriority" then
+                        local curWave = lastStateInfo and lastStateInfo.Wave or 0
+                        table.insert(mList, {time = currentTime, type = "Priority", priority = args[4], unitId = args[3], asset = targetAsset, pos = p, wave = curWave})
+                    end
                 end
             end
         end
-        if typeof(setnamecallmethod) == "function" then pcall(setnamecallmethod, method) end
-        return oldNamecall(self, ...)
-    end
-end
         if typeof(setnamecallmethod) == "function" then pcall(setnamecallmethod, method) end
         return oldNamecall(self, ...)
     end))
@@ -10280,11 +10404,12 @@ local function armExpeditionHelperCapture(priority)
     local getCFrameComponents = CFrame.new().GetComponents
     previousNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local method = getnamecallmethod()
-        local args = {...}
+        if method ~= "FireServer" then return previousNamecall(self, ...) end
         local capture = getgenv().ExpeditionAutoHelperCapture
-        if capture and capture.serial == serial and not checkcaller()
-            and method == "FireServer" and typeof(self) == "Instance" and self.Name == "ReplicaSignal"
-            and args[2] == "PlaceGameUnit" then
+        if not capture or capture.serial ~= serial then return previousNamecall(self, ...) end
+        if typeof(checkcaller) == "function" and checkcaller() then return previousNamecall(self, ...) end
+        local args = {...}
+        if typeof(self) == "Instance" and self.Name == "ReplicaSignal" and args[2] == "PlaceGameUnit" then
             for index = 3, #args do
                 if typeof(args[index]) == "CFrame" then
                     getgenv().ExpeditionAutoCapturedPosition = {
@@ -12686,7 +12811,7 @@ for index = 1, 10 do
 end
 
 task.spawn(function()
-    while expeditionScriptIsCurrent() and task.wait(0.1) do
+    while expeditionScriptIsCurrent() and task.wait(0.35) do
         local captured = getgenv().ExpeditionAutoCapturedPosition
         if captured then
             getgenv().ExpeditionAutoCapturedPosition = nil
