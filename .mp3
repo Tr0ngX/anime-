@@ -1,6 +1,8 @@
-local allowedGameIds = {[5794828131] = true, [7613921865] = true}
+local allowedGameIds = {
+    [5794828131] = true,
+    [7613921865] = true,
+}
 if not allowedGameIds[game.GameId] then
-    warn("[AnimeExpeditionsUltimate] GameID không trùng khớp (" .. tostring(game.GameId) .. "). Script chỉ dành riêng cho Anime Expeditions!")
     return
 end
 
