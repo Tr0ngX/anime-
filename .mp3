@@ -2448,6 +2448,30 @@ Tabs.Settings:AddToggle("UITransparencyToggle", {
     pcall(function() Fluent:ToggleTransparency(state) end)
     saveConfig()
 end)
+local function formatNumber(amount)
+    local num = tonumber(amount) or 0
+    local sign = num < 0 and "-" or ""
+    local formatted = tostring(math.floor(math.abs(num)))
+    local result = formatted:reverse():gsub("(%d%d%d)", "%1,")
+    return sign .. result:reverse():gsub("^,", "")
+end
+local function deepPeek(value)
+    if value == nil then return nil end
+    local val = value
+    for _ = 1, 6 do
+        if type(val) == "table" and (val.type == "State" or val._peek or val._value ~= nil) then
+            local ok, res = pcall(function() return Fusion.peek(val) end)
+            if ok and res ~= nil and res ~= val then
+                val = res
+            else
+                break
+            end
+        else
+            break
+        end
+    end
+    return val
+end
 local paragraphUpdateErrors = setmetatable({}, {__mode = "k"})
 local function safeSetParagraphDesc(paragraph, description)
     if not paragraph then return false end
@@ -4985,7 +5009,7 @@ pcall(function()
         if maxExp and maxExp > 0 then
             local ratio = math.clamp(curExp / maxExp, 0, 1)
             local filled = math.floor(ratio * 12 + 0.5)
-            local bar = string.rep("▰", filled) .. string.rep("▱", 12 - filled) .. string.format(" %d%%", math.floor(ratio * 100))
+            local bar = string.format("[%s%s] %d%%", string.rep("■", filled), string.rep("-", 12 - filled), math.floor(ratio * 100))
             blackPlayerExp.Text = string.format("Lvl %s  %s  (%s/%s XP)", tostring(lvl), bar, formatNumber(curExp), formatNumber(maxExp))
         else
             blackPlayerExp.Text = string.format("Lvl %s (%s EXP)", tostring(lvl), formatNumber(curExp))
@@ -5502,7 +5526,7 @@ task.spawn(function()
                 if maxExp and maxExp > 0 then
                     local ratio = math.clamp(curExp / maxExp, 0, 1)
                     local filled = math.floor(ratio * 12 + 0.5)
-                    local bar = string.rep("▰", filled) .. string.rep("▱", 12 - filled) .. string.format(" %d%%", math.floor(ratio * 100))
+                    local bar = string.format("[%s%s] %d%%", string.rep("■", filled), string.rep("-", 12 - filled), math.floor(ratio * 100))
                     blackPlayerExp.Text = string.format("Lvl %s  %s  (%s/%s XP)", tostring(lvl), bar, formatNumber(curExp), formatNumber(maxExp))
                 else
                     blackPlayerExp.Text = string.format("Lvl %s (%s EXP)", tostring(lvl), formatNumber(curExp))
@@ -9095,12 +9119,6 @@ local function getEmoji(key)
     if meta then return string.format("<:%s:%d>", meta.name:lower(), meta.id) end
     return ""
 end
-local function formatNumber(amount)
-    local sign = amount < 0 and "-" or ""
-    local formatted = tostring(math.floor(math.abs(amount)))
-    local result, k = formatted:reverse():gsub("(%d%d%d)", "%1,")
-    return sign .. result:reverse():gsub("^,", "")
-end
 local function chunkLines(lines)
     local chunks = {}
     local currentChunk = ""
@@ -9249,7 +9267,8 @@ local function buildMatchStatsEmbed(matchState, isTestMode, customResult, oldIte
     end
     local matchResult = isTestMode and "Test Match" or customResult
     local isInfinite = matchState.Gamemode and string.find(matchState.Gamemode:lower(), "infinite") ~= nil
-    local embedColor = isInfinite and 0x9B59B6 or 0xF2C94C
+    local isDefeat = not isTestMode and (matchResult == "Defeat" or tostring(customResult):lower():find("defeat") ~= nil or (matchState and matchState.CurrentGameState == "Defeat") or (matchState and tonumber(matchState.BaseHealth) and tonumber(matchState.BaseHealth) <= 0 and not isInfinite))
+    local embedColor = isInfinite and 0x9B59B6 or (isDefeat and 0xE74C3C or 0xF2C94C)
     local titlePrefix = ""
     if isInfinite then
         titlePrefix = "[Infinite - Wave " .. tostring(matchState.Wave or 0) .. "] "
@@ -9305,6 +9324,7 @@ local function buildMatchStatsEmbed(matchState, isTestMode, customResult, oldIte
     end
     
     return {
+        content = isDefeat and "@everyone" or nil,
         username = "Anime Expeditions Auto",
         avatar_url = gameIconUrl,
         embeds = {
